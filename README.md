@@ -171,13 +171,37 @@ python3 tools/visualize_yolo_labels.py \
   --limit 20
 ```
 
-## 后续运行命令占位
+## Day 3 单图推理
 
-以下命令是后续开发占位，不应在 Day 2 运行模型推理或训练。
+Grounding DINO 单图推理用于本地 WSL 的少量图片调试。大规模 Grounding DINO 推理必须放到远程 GPU 服务器运行，不要在本地 WSL 上跑全量数据。
+
+运行前需要将 `--config-file` 和 `--checkpoint` 替换为实际的 Grounding DINO 配置文件和权重路径。
 
 ```bash
-# Day 3-4: Grounding DINO 推理，待实现
-python3 tools/run_grounding_dino_single.py --config configs/default.yaml --image data/samples/images/example.jpg
+python3 tools/run_grounding_dino_single.py \
+  --image data/samples/images/example.jpg \
+  --prompt "pedestrian. people. bicycle. car. van. truck. bus. motor." \
+  --output-dir outputs/debug_grounding \
+  --box-threshold 0.35 \
+  --text-threshold 0.25 \
+  --device cpu \
+  --config-file configs/grounding_dino_placeholder.py \
+  --checkpoint checkpoints/grounding_dino_placeholder.pth
+```
+
+输出内容：
+
+```text
+outputs/debug_grounding/<image_stem>_grounding_dino.jpg
+outputs/debug_grounding/<image_stem>_grounding_dino.json
+```
+
+## 后续运行命令占位
+
+以下命令是后续开发占位，不应在 Day 3 运行 SAM、自动标签生成或 YOLO 训练。
+
+```bash
+# Day 4: Grounding DINO 批量推理，待实现
 python3 tools/run_grounding_dino_batch.py --config configs/default.yaml
 
 # Day 5: SAM 修正，待实现
