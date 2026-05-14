@@ -1,0 +1,17 @@
+data/raw/
+data/processed/
+checkpoints/
+weights/
+runs/
+outputs/
+*.pt
+*.pth
+*.onnx
+*.engine
+*.zip
+*.tar
+*.tar.gz
+__pycache__/
+.vscode/
+.idea/
+.DS_Store

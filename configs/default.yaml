@@ -1,0 +1,93 @@
+project:
+  name: ovdas
+  full_name: "OVDAS: Open-Vocabulary Drone Auto-annotation for Small-object Detection"
+  seed: 42
+  dataset: visdrone
+
+data:
+  raw_root: data/raw/VisDrone
+  sample_image_dir: data/samples/images
+  sample_label_dir: data/samples/labels
+  processed_root: data/processed/visdrone
+  image_dir: data/processed/visdrone/images
+  label_dir: data/processed/visdrone/labels
+  train_split: train
+  val_split: val
+  test_split: test
+
+classes:
+  names:
+    - pedestrian
+    - people
+    - bicycle
+    - car
+    - van
+    - truck
+    - bus
+    - motor
+  prompt: "pedestrian. people. bicycle. car. van. truck. bus. motor."
+
+grounding_dino:
+  enabled: false
+  config_path: configs/grounding_dino_placeholder.py
+  checkpoint_path: checkpoints/grounding_dino_placeholder.pth
+  prompt: "pedestrian. people. bicycle. car. van. truck. bus. motor."
+  box_threshold: 0.35
+  text_threshold: 0.25
+  device: cuda
+  skip_existing: true
+
+sam:
+  enabled: false
+  model_type: vit_h
+  checkpoint_path: checkpoints/sam_vit_h_placeholder.pth
+  device: cuda
+  mask_threshold: 0.0
+  skip_existing: true
+
+auto_label:
+  source: grounding_dino_sam
+  confidence_threshold: 0.35
+  min_box_area: 4
+  use_sam_refine: true
+  allow_empty_labels: true
+  output_format: yolo
+
+evaluation:
+  iou_threshold: 0.5
+  metrics:
+    - precision
+    - recall
+    - map50
+    - map50_95
+    - mean_iou
+  size_definition: coco
+  coco_size_thresholds:
+    small: 1024
+    medium: 9216
+
+yolo:
+  model: yolov8s.pt
+  task: detect
+  epochs: 100
+  imgsz: 1024
+  batch: 16
+  device: 0
+  workers: 8
+  project: runs
+  manual_run_name: yolov8s_manual_labels
+  auto_run_name: yolov8s_auto_labels
+
+paths:
+  grounding_dino_json: outputs/grounding_dino_json
+  sam_masks: outputs/sam_masks
+  auto_labels: outputs/auto_labels
+  debug_outputs: outputs/debug
+  results: results
+  tables: results/tables
+  metrics: results/metrics
+  visualizations: results/visualizations
+  failure_cases: results/failure_cases
+  figures: figures
+  report_figures: report/figures
+  logs: logs

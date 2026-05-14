@@ -1,0 +1,32 @@
+dataset: visdrone
+task: object_detection
+
+classes:
+  - id: 0
+    name: pedestrian
+  - id: 1
+    name: people
+  - id: 2
+    name: bicycle
+  - id: 3
+    name: car
+  - id: 4
+    name: van
+  - id: 5
+    name: truck
+  - id: 6
+    name: bus
+  - id: 7
+    name: motor
+
+prompts:
+  default: "pedestrian. people. bicycle. car. van. truck. bus. motor."
+  class_prompts:
+    pedestrian: "pedestrian"
+    people: "people"
+    bicycle: "bicycle"
+    car: "car"
+    van: "van"
+    truck: "truck"
+    bus: "bus"
+    motor: "motor"

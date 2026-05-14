@@ -1,0 +1,22 @@
+name: ovdas
+channels:
+  - pytorch
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.10
+  - pip
+  - numpy
+  - pillow
+  - matplotlib
+  - pandas
+  - tqdm
+  - pyyaml
+  - scikit-learn
+  - pytorch
+  - torchvision
+  - pytest
+  - pip:
+      - opencv-python
+      - ultralytics
+      - rich
