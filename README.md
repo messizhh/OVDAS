@@ -126,30 +126,61 @@ python3 tools/list_samples.py
 bash scripts/local_debug.sh
 ```
 
-## 后续运行命令占位
+## Day 2 数据转换
 
-以下命令是后续开发占位，当前 Day 1 不应实际运行模型推理或训练。
+将 VisDrone DET 原始标注转换为 YOLO 格式标签。输入目录需要包含 `images/` 和 `annotations/`。
+
+本地 WSL 可以先用 val 集做小规模转换测试：
 
 ```bash
-# Day 2: VisDrone 转 YOLO，待实现
-python tools/convert_visdrone_to_yolo.py --config configs/default.yaml
+python3 tools/convert_visdrone_to_yolo.py \
+  --src-root data/raw/VisDrone/VisDrone2019-DET-val \
+  --out-root data/processed/visdrone \
+  --split val \
+  --classes-config configs/classes_visdrone.yaml \
+  --copy-images \
+  --limit 20
+```
 
+服务器或数据准备阶段可转换 train 全量数据：
+
+```bash
+python3 tools/convert_visdrone_to_yolo.py \
+  --src-root data/raw/VisDrone/VisDrone2019-DET-train \
+  --out-root data/processed/visdrone \
+  --split train \
+  --classes-config configs/classes_visdrone.yaml \
+  --copy-images
+```
+
+输出目录：
+
+```text
+data/processed/visdrone/images/<split>/
+data/processed/visdrone/labels/<split>/
+```
+
+## 后续运行命令占位
+
+以下命令是后续开发占位，不应在 Day 2 运行模型推理或训练。
+
+```bash
 # Day 3-4: Grounding DINO 推理，待实现
-python tools/run_grounding_dino_single.py --config configs/default.yaml --image data/samples/images/example.jpg
-python tools/run_grounding_dino_batch.py --config configs/default.yaml
+python3 tools/run_grounding_dino_single.py --config configs/default.yaml --image data/samples/images/example.jpg
+python3 tools/run_grounding_dino_batch.py --config configs/default.yaml
 
 # Day 5: SAM 修正，待实现
-python tools/run_sam_refine_batch.py --config configs/default.yaml
+python3 tools/run_sam_refine_batch.py --config configs/default.yaml
 
 # Day 6: 自动标签生成，待实现
-python tools/generate_yolo_labels_from_auto.py --config configs/default.yaml
+python3 tools/generate_yolo_labels_from_auto.py --config configs/default.yaml
 
 # Day 8-9: YOLO 训练，服务器运行，待实现
 yolo detect train data=configs/yolo_visdrone_auto.yaml model=yolov8s.pt
 
 # Day 7/11: 评估与分析，待实现
-python tools/evaluate_auto_labels.py --config configs/default.yaml
-python tools/analyze_small_objects.py --config configs/default.yaml
+python3 tools/evaluate_auto_labels.py --config configs/default.yaml
+python3 tools/analyze_small_objects.py --config configs/default.yaml
 ```
 
 ## 结果目录
