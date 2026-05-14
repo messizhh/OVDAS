@@ -38,6 +38,11 @@ def validate_input_paths(
     """Validate image, model config, and checkpoint paths."""
     if not image_path.is_file():
         raise FileNotFoundError(f"Image file does not exist: {image_path}")
+    validate_model_paths(config_file, checkpoint)
+
+
+def validate_model_paths(config_file: Path, checkpoint: Path) -> None:
+    """Validate Grounding DINO model config and checkpoint paths."""
     if not config_file.is_file():
         raise FileNotFoundError(f"Grounding DINO config file does not exist: {config_file}")
     if not checkpoint.is_file():
@@ -131,49 +136,82 @@ def run_grounding_dino_single(
 ) -> GroundingDinoResult:
     """Run Grounding DINO inference for one image."""
     validate_input_paths(image_path, config_file, checkpoint)
-    resolved_device = resolve_device(device)
-    load_model, load_image, predict = load_grounding_dino_api()
-
-    model = load_model(
-        model_config_path=str(config_file),
-        model_checkpoint_path=str(checkpoint),
-        device=resolved_device,
+    predictor = GroundingDinoPredictor(
+        config_file=config_file,
+        checkpoint=checkpoint,
+        device=device,
     )
-    image_source, image_tensor = load_image(str(image_path))
-    boxes, logits, phrases = predict(
-        model=model,
-        image=image_tensor,
-        caption=prompt,
-        box_threshold=box_threshold,
-        text_threshold=text_threshold,
-        device=resolved_device,
-    )
-
-    image_width, image_height = read_image_size(image_path)
-    box_rows = tensor_to_list(boxes)
-    score_rows = tensor_to_list(logits)
-    phrase_rows = list(phrases)
-
-    detections: list[GroundingDinoDetection] = []
-    for box, score, phrase in zip(box_rows, score_rows, phrase_rows):
-        box_values = [float(value) for value in box]
-        detections.append(
-            GroundingDinoDetection(
-                bbox_cxcywh_norm=box_values,
-                bbox_xyxy=cxcywh_norm_to_xyxy(box_values, image_width, image_height),
-                score=float(score),
-                phrase=str(phrase),
-            )
-        )
-
-    return GroundingDinoResult(
-        image_path=image_path.as_posix(),
+    return predictor.predict(
+        image_path=image_path,
         prompt=prompt,
         box_threshold=box_threshold,
         text_threshold=text_threshold,
-        device=resolved_device,
-        detections=detections,
     )
+
+
+class GroundingDinoPredictor:
+    """Reusable Grounding DINO predictor for one-image-at-a-time inference."""
+
+    def __init__(self, config_file: Path, checkpoint: Path, device: str) -> None:
+        """Load Grounding DINO once for repeated single-image predictions."""
+        validate_model_paths(config_file, checkpoint)
+        self.config_file = config_file
+        self.checkpoint = checkpoint
+        self.device = resolve_device(device)
+        load_model, load_image, predict = load_grounding_dino_api()
+        self._load_image = load_image
+        self._predict = predict
+        self._model = load_model(
+            model_config_path=str(config_file),
+            model_checkpoint_path=str(checkpoint),
+            device=self.device,
+        )
+
+    def predict(
+        self,
+        image_path: Path,
+        prompt: str,
+        box_threshold: float,
+        text_threshold: float,
+    ) -> GroundingDinoResult:
+        """Run Grounding DINO inference for one image using the loaded model."""
+        if not image_path.is_file():
+            raise FileNotFoundError(f"Image file does not exist: {image_path}")
+        _, image_tensor = self._load_image(str(image_path))
+        boxes, logits, phrases = self._predict(
+            model=self._model,
+            image=image_tensor,
+            caption=prompt,
+            box_threshold=box_threshold,
+            text_threshold=text_threshold,
+            device=self.device,
+        )
+
+        image_width, image_height = read_image_size(image_path)
+        box_rows = tensor_to_list(boxes)
+        score_rows = tensor_to_list(logits)
+        phrase_rows = list(phrases)
+
+        detections: list[GroundingDinoDetection] = []
+        for box, score, phrase in zip(box_rows, score_rows, phrase_rows):
+            box_values = [float(value) for value in box]
+            detections.append(
+                GroundingDinoDetection(
+                    bbox_cxcywh_norm=box_values,
+                    bbox_xyxy=cxcywh_norm_to_xyxy(box_values, image_width, image_height),
+                    score=float(score),
+                    phrase=str(phrase),
+                )
+            )
+
+        return GroundingDinoResult(
+            image_path=image_path.as_posix(),
+            prompt=prompt,
+            box_threshold=box_threshold,
+            text_threshold=text_threshold,
+            device=self.device,
+            detections=detections,
+        )
 
 
 def save_result_json(result: GroundingDinoResult, output_json: Path) -> None:

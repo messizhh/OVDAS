@@ -196,14 +196,46 @@ outputs/debug_grounding/<image_stem>_grounding_dino.jpg
 outputs/debug_grounding/<image_stem>_grounding_dino.json
 ```
 
-## 后续运行命令占位
+## Day 4 Grounding DINO 批量推理
 
-以下命令是后续开发占位，不应在 Day 3 运行 SAM、自动标签生成或 YOLO 训练。
+Grounding DINO 批量推理用于生成后续 SAM 修正和自动标签转换所需的中间结果。本地 WSL 只建议用 `--limit 5` 到 `--limit 20` 做小样本检查；val/train 全量推理应在远程 GPU 服务器执行。
+
+服务器 val debug 推荐先跑前 20 张，确认 prompt、阈值、权重路径和输出格式正常：
 
 ```bash
-# Day 4: Grounding DINO 批量推理，待实现
-python3 tools/run_grounding_dino_batch.py --config configs/default.yaml
+bash scripts/server_run_grounding_dino_val_debug.sh
+```
 
+等价完整命令如下：
+
+```bash
+python3 tools/run_grounding_dino_batch.py \
+  --image-dir data/processed/visdrone/images/val \
+  --output-dir outputs/grounding_dino_json/val_debug \
+  --prompt "pedestrian. people. bicycle. car. van. truck. bus. motor." \
+  --box-threshold 0.35 \
+  --text-threshold 0.25 \
+  --device cuda \
+  --config-file external/GroundingDINO/groundingdino/config/GroundingDINO_SwinT_OGC.py \
+  --checkpoint checkpoints/groundingdino_swint_ogc.pth \
+  --limit 20 \
+  --skip-existing
+```
+
+每张成功处理的图片会在输出目录生成一份 JSON 和一张可视化图：
+
+```text
+outputs/grounding_dino_json/val_debug/<image_stem>_grounding_dino.json
+outputs/grounding_dino_json/val_debug/<image_stem>_grounding_dino.jpg
+```
+
+`--skip-existing` 会在对应 JSON 已存在时跳过该图片，方便服务器中断后续跑。`outputs/` 是大规模中间结果目录，已被 `.gitignore` 排除，不要提交或打包全量推理结果；最终报告只保留少量关键 JSON、CSV 或可视化示例即可。
+
+## 后续运行命令占位
+
+以下命令是后续开发占位，不应在 Day 4 运行 SAM、自动标签生成或 YOLO 训练。
+
+```bash
 # Day 5: SAM 修正，待实现
 python3 tools/run_sam_refine_batch.py --config configs/default.yaml
 
