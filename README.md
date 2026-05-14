@@ -160,6 +160,17 @@ data/processed/visdrone/images/<split>/
 data/processed/visdrone/labels/<split>/
 ```
 
+转换完成后，可以可视化检查 YOLO 标签是否和图像对齐：
+
+```bash
+python3 tools/visualize_yolo_labels.py \
+  --data-root data/processed/visdrone \
+  --split val \
+  --classes-config configs/classes_visdrone.yaml \
+  --out-dir results/visualizations/manual_labels_val \
+  --limit 20
+```
+
 ## 后续运行命令占位
 
 以下命令是后续开发占位，不应在 Day 2 运行模型推理或训练。
