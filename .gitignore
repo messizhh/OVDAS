@@ -3,7 +3,8 @@ data/processed/
 checkpoints/
 weights/
 runs/
-outputs/
+outputs/*
+!outputs/.gitkeep
 *.pt
 *.pth
 *.onnx
