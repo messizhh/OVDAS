@@ -23,4 +23,15 @@ echo "[INFO] Checking auto-label evaluation syntax..."
 ${PYTHON_BIN} -m py_compile tools/evaluate_auto_labels.py
 echo "[INFO] Checking auto-label evaluation CLI help..."
 ${PYTHON_BIN} tools/evaluate_auto_labels.py --help >/dev/null
+echo "[INFO] Checking YOLO Day 8 config and server scripts..."
+test -f configs/yolo_visdrone_manual.yaml
+test -f configs/yolo_visdrone_auto_sam_refine.yaml
+test -f configs/yolo_visdrone_auto_dino.yaml
+test -f scripts/server_prepare_visdrone_yolo_full.sh
+test -f scripts/server_train_yolo_manual.sh
+test -f scripts/server_train_yolo_auto_sam_refine.sh
+test -f scripts/server_train_yolo_auto_dino.sh
+test -f scripts/server_val_yolo_manual.sh
+test -f scripts/server_val_yolo_auto_sam_refine.sh
+test -f scripts/server_val_yolo_auto_dino.sh
 echo "[INFO] Local debug checks passed."

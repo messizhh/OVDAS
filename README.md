@@ -473,14 +473,91 @@ python3 tools/evaluate_auto_labels.py \
 
 脚本以 `--pred-label-dir` 中的自动标签 txt 作为评估集合，适合 val_debug 这种只处理前 20 张图片的实验。空标签、缺少人工标签、非法标签行和单张图片失败都会记录统计并继续处理。
 
-## 后续运行命令占位
+## Day 8 YOLO 训练准备
 
-以下命令是后续开发占位，不应在 Day 7 运行 YOLO 训练或后续小目标分析。
+Day 8 只准备 YOLO 数据配置和服务器脚本，不在本地 WSL 运行正式训练。`data/processed/`、`runs/` 和大规模中间结果都不应提交 Git。
+
+先在服务器上准备完整 VisDrone 人工标签 YOLO 数据：
 
 ```bash
-# Day 8-9: YOLO 训练，服务器运行，待实现
-yolo detect train data=configs/yolo_visdrone_auto.yaml model=yolov8s.pt
+bash scripts/server_prepare_visdrone_yolo_full.sh
+```
 
+该脚本会完整转换 train 和 val，不带 `--limit`：
+
+```text
+data/raw/VisDrone/VisDrone2019-DET-train -> data/processed/visdrone/images/train, labels/train
+data/raw/VisDrone/VisDrone2019-DET-val   -> data/processed/visdrone/images/val, labels/val
+```
+
+转换后脚本会输出 `images/train`、`labels/train`、`images/val`、`labels/val` 的文件数量，便于检查图片和标签是否对齐。
+
+人工标签 baseline 使用：
+
+```bash
+bash scripts/server_train_yolo_manual.sh
+```
+
+等价核心命令：
+
+```bash
+yolo detect train \
+  model=yolov8s.pt \
+  data=configs/yolo_visdrone_manual.yaml \
+  epochs=100 \
+  imgsz=1024 \
+  batch=16 \
+  device=0 \
+  project=runs \
+  name=yolov8s_manual_visdrone
+```
+
+自动标签训练脚本已经准备好，但现在不能直接正式运行。必须先对 train 集完成 Grounding DINO、SAM refine 和 auto label 生成，并整理为以下 YOLO 数据目录：
+
+```text
+data/processed/visdrone_auto_sam_refine/images/train
+data/processed/visdrone_auto_sam_refine/labels/train
+data/processed/visdrone_auto_sam_refine/images/val
+data/processed/visdrone_auto_sam_refine/labels/val
+
+data/processed/visdrone_auto_dino/images/train
+data/processed/visdrone_auto_dino/labels/train
+data/processed/visdrone_auto_dino/images/val
+data/processed/visdrone_auto_dino/labels/val
+```
+
+当前 `outputs/auto_labels/*_val_debug/labels` 只是 val_debug 的 20 张样本，不能用于正式训练。自动标签数据准备完成后，服务器训练命令为：
+
+```bash
+bash scripts/server_train_yolo_auto_sam_refine.sh
+bash scripts/server_train_yolo_auto_dino.sh
+```
+
+如需在服务器上快速检查命令和环境，可以手动把训练命令临时改成 `epochs=1`，并使用小样本数据目录；正式脚本默认保留 100 epochs，用于课程实验结果。
+
+## Day 9 YOLO 验证
+
+训练完成后，使用人工 val 标签评估三个模型，保证 manual baseline、DINO-only 自动标签训练模型、DINO+SAM 自动标签训练模型在同一验证集上可比：
+
+```bash
+bash scripts/server_val_yolo_manual.sh
+bash scripts/server_val_yolo_auto_sam_refine.sh
+bash scripts/server_val_yolo_auto_dino.sh
+```
+
+验证结果会保存到：
+
+```text
+results/yolo_eval/manual_val
+results/yolo_eval/auto_sam_refine_val
+results/yolo_eval/auto_dino_val
+```
+
+## 后续运行命令占位
+
+以下命令是后续开发占位，不应在 Day 8 本地运行 YOLO 训练或后续小目标分析。
+
+```bash
 # Day 11: 小目标专项分析，待实现
 python3 tools/analyze_small_objects.py --config configs/default.yaml
 ```
