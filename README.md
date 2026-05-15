@@ -603,11 +603,50 @@ configs/yolo_visdrone_auto_dino_sam.yaml
 
 E. 后续自动标签 YOLO 训练：
 
-本轮不启动 YOLO 自动标签训练。后续训练只需使用上面两份配置作为数据入口：
+后续自动标签 YOLO 训练只需使用上面两份配置作为数据入口：
 
 ```text
 configs/yolo_visdrone_auto_dino_only.yaml
 configs/yolo_visdrone_auto_dino_sam.yaml
+```
+
+## 自动标签 YOLO 训练
+
+自动标签 YOLO 正式训练必须在远程 GPU 服务器运行，不要在本地 WSL 跑 100 epochs 正式训练。两套自动标签数据集的验证集仍使用人工标签 `data/processed/visdrone/labels/val`，用于和人工标签 baseline 公平比较。
+
+只训练 DINO-only 自动标签模型：
+
+```bash
+RUN_DINO_ONLY=1 RUN_DINO_SAM=0 bash scripts/server_train_yolo_auto.sh
+```
+
+只训练 DINO+SAM 自动标签模型：
+
+```bash
+RUN_DINO_ONLY=0 RUN_DINO_SAM=1 bash scripts/server_train_yolo_auto.sh
+```
+
+两套模型都训练：
+
+```bash
+bash scripts/server_train_yolo_auto.sh
+```
+
+默认训练参数与人工标签 baseline 保持一致：
+
+```text
+model = yolov8s.pt
+epochs = 100
+imgsz = 1024
+batch = 16
+device = 0
+```
+
+可通过环境变量覆盖 `MODEL`、`EPOCHS`、`IMGSZ`、`BATCH`、`DEVICE`、`WORKERS`、`RUN_DINO_ONLY` 和 `RUN_DINO_SAM`。输出目录：
+
+```text
+runs/yolov8s_auto_dino_only_visdrone
+runs/yolov8s_auto_dino_sam_visdrone
 ```
 
 ## Day 8 YOLO 训练准备
