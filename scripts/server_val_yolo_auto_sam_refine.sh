@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 set -e
 
+cd "$(dirname "$0")/.."
+yolo settings datasets_dir="$(pwd)"
+
 yolo detect val \
   model=runs/yolov8s_auto_sam_refine_visdrone/weights/best.pt \
   data=configs/yolo_visdrone_manual.yaml \

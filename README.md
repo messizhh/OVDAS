@@ -477,6 +477,14 @@ python3 tools/evaluate_auto_labels.py \
 
 Day 8 只准备 YOLO 数据配置和服务器脚本，不在本地 WSL 运行正式训练。`data/processed/`、`runs/` 和大规模中间结果都不应提交 Git。
 
+YOLO 训练和验证脚本会先切到项目根目录，并执行：
+
+```bash
+yolo settings datasets_dir="$(pwd)"
+```
+
+这可以避免 Ultralytics 把数据 YAML 中的相对 `path` 解析到默认的 `datasets/` 目录下。服务器上请从仓库任意位置调用这些脚本即可，脚本会自行定位到项目根目录。
+
 先在服务器上准备完整 VisDrone 人工标签 YOLO 数据：
 
 ```bash
