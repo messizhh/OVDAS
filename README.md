@@ -337,7 +337,16 @@ bus -> 6
 motor -> 7
 ```
 
-脚本会清洗 phrase 的大小写、空格和末尾标点；无法映射的类别会跳过并计入统计。空 detections 或过滤后无标签的图片仍会生成空 txt，方便后续 YOLO 训练流程保持样本对齐。
+脚本会清洗 phrase 的大小写、空格、英文句号和多个连续空格；无法映射的类别会跳过并计入 `skipped_unknown_class`。Grounding DINO 有时会把多个 prompt 类别合并成一个 phrase，脚本内置了少量 alias / multi-phrase 映射：
+
+```text
+car van -> car
+car van truck -> car
+van truck -> van
+pedestrian people -> people
+```
+
+通过 alias 保留下来的框会计入 `mapped_alias_labels`。空 detections 或过滤后无标签的图片仍会生成空 txt，方便后续 YOLO 训练流程保持样本对齐。
 
 DINO+SAM 自动标签 debug 推荐命令：
 
@@ -389,6 +398,7 @@ processed_files
 failed_files
 total_detections
 kept_labels
+mapped_alias_labels
 skipped_low_score
 skipped_unknown_class
 skipped_invalid_bbox

@@ -17,6 +17,12 @@ import yaml
 
 DEFAULT_IMAGE_EXTS = "jpg,jpeg,png,bmp,tif,tiff"
 AUTO_JSON_SUFFIXES = ("_grounding_dino", "_sam_refine")
+PHRASE_ALIASES = {
+    "car van": "car",
+    "car van truck": "car",
+    "van truck": "van",
+    "pedestrian people": "people",
+}
 
 
 @dataclass
@@ -40,6 +46,7 @@ class Summary:
     failed_files: int = 0
     total_detections: int = 0
     kept_labels: int = 0
+    mapped_alias_labels: int = 0
     skipped_low_score: int = 0
     skipped_unknown_class: int = 0
     skipped_invalid_bbox: int = 0
@@ -192,6 +199,21 @@ def load_class_mapping(classes_config: Path) -> tuple[dict[str, int], dict[int, 
     if not phrase_to_id:
         raise ValueError(f"No classes found in {classes_config}")
     return phrase_to_id, id_to_name
+
+
+def resolve_class_id(
+    phrase: str,
+    phrase_to_id: dict[str, int],
+) -> tuple[int | None, bool]:
+    """Resolve a cleaned phrase to class id and whether an alias was used."""
+    class_id = phrase_to_id.get(phrase)
+    if class_id is not None:
+        return class_id, False
+
+    alias_target = PHRASE_ALIASES.get(phrase)
+    if alias_target is None:
+        return None, False
+    return phrase_to_id.get(alias_target), True
 
 
 def collect_json_files(json_dir: Path, limit: int | None) -> list[Path]:
@@ -454,10 +476,12 @@ def convert_detections(
             continue
 
         phrase = clean_phrase(item.get("phrase", ""))
-        class_id = phrase_to_id.get(phrase)
+        class_id, used_alias = resolve_class_id(phrase, phrase_to_id)
         if class_id is None:
             summary.skipped_unknown_class += 1
             continue
+        if used_alias:
+            summary.mapped_alias_labels += 1
 
         bbox = select_bbox(
             detection=item,
@@ -497,6 +521,7 @@ def write_stats_csv(summary: Summary, id_to_name: dict[int, str], stats_csv: Pat
         ("summary", "", "", "failed_files", summary.failed_files),
         ("summary", "", "", "total_detections", summary.total_detections),
         ("summary", "", "", "kept_labels", summary.kept_labels),
+        ("summary", "", "", "mapped_alias_labels", summary.mapped_alias_labels),
         ("summary", "", "", "skipped_low_score", summary.skipped_low_score),
         ("summary", "", "", "skipped_unknown_class", summary.skipped_unknown_class),
         ("summary", "", "", "skipped_invalid_bbox", summary.skipped_invalid_bbox),
@@ -529,6 +554,7 @@ def print_summary(summary: Summary) -> None:
     print(f"- failed_files: {summary.failed_files}")
     print(f"- total_detections: {summary.total_detections}")
     print(f"- kept_labels: {summary.kept_labels}")
+    print(f"- mapped_alias_labels: {summary.mapped_alias_labels}")
     print(f"- skipped_low_score: {summary.skipped_low_score}")
     print(f"- skipped_unknown_class: {summary.skipped_unknown_class}")
     print(f"- skipped_invalid_bbox: {summary.skipped_invalid_bbox}")
