@@ -19,4 +19,8 @@ echo "[INFO] Checking auto-label generation syntax..."
 ${PYTHON_BIN} -m py_compile tools/generate_yolo_labels_from_auto.py
 echo "[INFO] Checking auto-label generation CLI help..."
 ${PYTHON_BIN} tools/generate_yolo_labels_from_auto.py --help >/dev/null
+echo "[INFO] Checking auto-label evaluation syntax..."
+${PYTHON_BIN} -m py_compile tools/evaluate_auto_labels.py
+echo "[INFO] Checking auto-label evaluation CLI help..."
+${PYTHON_BIN} tools/evaluate_auto_labels.py --help >/dev/null
 echo "[INFO] Local debug checks passed."

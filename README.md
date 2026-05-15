@@ -409,16 +409,79 @@ output_label_dir
 
 统计 CSV 会写入 summary 指标和每类保留标签数量，例如 `results/tables/auto_label_statistics_sam_refine_val_debug.csv`。`outputs/auto_labels/` 属于中间结果目录，不应提交或打包全量文件。
 
+## Day 7 自动标签质量评估
+
+自动标签质量评估脚本将人工 YOLO 标签与自动 YOLO 标签按图片和类别进行 IoU 匹配。默认使用 greedy matching：
+
+```text
+同类别 GT 与 prediction 计算 IoU
+按 IoU 从高到低匹配
+每个 GT 最多匹配一个 prediction
+每个 prediction 最多匹配一个 GT
+默认 IoU threshold = 0.5
+```
+
+输出三类 CSV：
+
+```text
+summary: gt_count, pred_count, matched_count, false_positive_count, false_negative_count, precision, recall, mean_iou
+by_class: 每个 VisDrone 类别的上述指标
+by_size: small / medium / large 的上述指标
+```
+
+尺寸划分默认使用 COCO 面积规则：
+
+```text
+small: area < 32 * 32
+medium: 32 * 32 <= area < 96 * 96
+large: area >= 96 * 96
+```
+
+服务器 val debug 可以一次评估 DINO-only 和 DINO+SAM：
+
+```bash
+bash scripts/server_eval_auto_labels_val_debug.sh
+```
+
+DINO-only 等价命令：
+
+```bash
+python3 tools/evaluate_auto_labels.py \
+  --gt-label-dir data/processed/visdrone/labels/val \
+  --pred-label-dir outputs/auto_labels/dino_val_debug/labels \
+  --image-dir data/processed/visdrone/images/val \
+  --classes-config configs/classes_visdrone.yaml \
+  --out-summary-csv results/tables/auto_label_quality_dino_val_debug_summary.csv \
+  --out-class-csv results/tables/auto_label_quality_dino_val_debug_by_class.csv \
+  --out-size-csv results/tables/auto_label_quality_dino_val_debug_by_size.csv \
+  --iou-threshold 0.5
+```
+
+DINO+SAM 等价命令：
+
+```bash
+python3 tools/evaluate_auto_labels.py \
+  --gt-label-dir data/processed/visdrone/labels/val \
+  --pred-label-dir outputs/auto_labels/sam_refine_val_debug/labels \
+  --image-dir data/processed/visdrone/images/val \
+  --classes-config configs/classes_visdrone.yaml \
+  --out-summary-csv results/tables/auto_label_quality_sam_refine_val_debug_summary.csv \
+  --out-class-csv results/tables/auto_label_quality_sam_refine_val_debug_by_class.csv \
+  --out-size-csv results/tables/auto_label_quality_sam_refine_val_debug_by_size.csv \
+  --iou-threshold 0.5
+```
+
+脚本以 `--pred-label-dir` 中的自动标签 txt 作为评估集合，适合 val_debug 这种只处理前 20 张图片的实验。空标签、缺少人工标签、非法标签行和单张图片失败都会记录统计并继续处理。
+
 ## 后续运行命令占位
 
-以下命令是后续开发占位，不应在 Day 6 运行自动标签质量评估或 YOLO 训练。
+以下命令是后续开发占位，不应在 Day 7 运行 YOLO 训练或后续小目标分析。
 
 ```bash
 # Day 8-9: YOLO 训练，服务器运行，待实现
 yolo detect train data=configs/yolo_visdrone_auto.yaml model=yolov8s.pt
 
-# Day 7/11: 评估与分析，待实现
-python3 tools/evaluate_auto_labels.py --config configs/default.yaml
+# Day 11: 小目标专项分析，待实现
 python3 tools/analyze_small_objects.py --config configs/default.yaml
 ```
 
