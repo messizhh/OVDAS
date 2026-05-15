@@ -316,14 +316,94 @@ output_dir
 
 空 detections 会正常生成空结果和可视化图；单张图片失败会记录到 `outputs/sam_refine_json/val_debug/sam_refine_batch_failures.txt`，不会中断整个 batch。
 
-## 后续运行命令占位
+## Day 6 自动标签生成
 
-以下命令是后续开发占位，不应在 Day 5 运行自动标签生成或 YOLO 训练。
+自动标签生成脚本将 Grounding DINO 或 SAM refine JSON 转换为 YOLO txt 标签：
+
+```text
+class_id x_center y_center width height
+```
+
+坐标会裁剪到图像范围内并归一化到 0 到 1。类别映射优先读取 `configs/classes_visdrone.yaml`，默认 8 类为：
+
+```text
+pedestrian -> 0
+people -> 1
+bicycle -> 2
+car -> 3
+van -> 4
+truck -> 5
+bus -> 6
+motor -> 7
+```
+
+脚本会清洗 phrase 的大小写、空格和末尾标点；无法映射的类别会跳过并计入统计。空 detections 或过滤后无标签的图片仍会生成空 txt，方便后续 YOLO 训练流程保持样本对齐。
+
+DINO+SAM 自动标签 debug 推荐命令：
 
 ```bash
-# Day 6: 自动标签生成，待实现
-python3 tools/generate_yolo_labels_from_auto.py --config configs/default.yaml
+bash scripts/server_generate_auto_labels_val_debug.sh
+```
 
+等价完整命令如下：
+
+```bash
+python3 tools/generate_yolo_labels_from_auto.py \
+  --json-dir outputs/sam_refine_json/val_debug \
+  --image-dir data/processed/visdrone/images/val \
+  --out-label-dir outputs/auto_labels/sam_refine_val_debug/labels \
+  --classes-config configs/classes_visdrone.yaml \
+  --bbox-key refined_bbox_xyxy \
+  --fallback-bbox-key bbox_xyxy \
+  --score-threshold 0.35 \
+  --min-box-area 4 \
+  --stats-csv results/tables/auto_label_statistics_sam_refine_val_debug.csv \
+  --limit 20 \
+  --skip-existing
+```
+
+DINO-only 自动标签生成使用原始 `bbox_xyxy`：
+
+```bash
+python3 tools/generate_yolo_labels_from_auto.py \
+  --json-dir outputs/grounding_dino_json/val_debug \
+  --image-dir data/processed/visdrone/images/val \
+  --out-label-dir outputs/auto_labels/dino_val_debug/labels \
+  --classes-config configs/classes_visdrone.yaml \
+  --bbox-key bbox_xyxy \
+  --fallback-bbox-key bbox_xyxy \
+  --score-threshold 0.35 \
+  --min-box-area 4 \
+  --stats-csv results/tables/auto_label_statistics_dino_val_debug.csv \
+  --limit 20 \
+  --skip-existing
+```
+
+如需构造可直接给 YOLO 使用的 image/label 子目录，可以加 `--copy-images --out-image-dir outputs/auto_labels/sam_refine_val_debug/images`。默认不复制图片，避免重复占用空间。
+
+summary 字段包括：
+
+```text
+total_json_files
+processed_files
+failed_files
+total_detections
+kept_labels
+skipped_low_score
+skipped_unknown_class
+skipped_invalid_bbox
+skipped_small_box
+empty_label_files
+output_label_dir
+```
+
+统计 CSV 会写入 summary 指标和每类保留标签数量，例如 `results/tables/auto_label_statistics_sam_refine_val_debug.csv`。`outputs/auto_labels/` 属于中间结果目录，不应提交或打包全量文件。
+
+## 后续运行命令占位
+
+以下命令是后续开发占位，不应在 Day 6 运行自动标签质量评估或 YOLO 训练。
+
+```bash
 # Day 8-9: YOLO 训练，服务器运行，待实现
 yolo detect train data=configs/yolo_visdrone_auto.yaml model=yolov8s.pt
 
