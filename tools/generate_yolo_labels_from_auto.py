@@ -52,6 +52,7 @@ class Summary:
     skipped_invalid_bbox: int = 0
     skipped_small_box: int = 0
     empty_label_files: int = 0
+    ensured_empty_label_files: int = 0
     copied_images: int = 0
     output_label_dir: str = ""
     class_counts: dict[int, int] = field(default_factory=dict)
@@ -96,6 +97,11 @@ def parse_args() -> argparse.Namespace:
         "--skip-existing",
         action="store_true",
         help="Skip a JSON when its output txt label already exists.",
+    )
+    parser.add_argument(
+        "--ensure-all-images",
+        action="store_true",
+        help="Create an empty txt label for each image that did not receive an output label.",
     )
     parser.add_argument(
         "--copy-images",
@@ -224,6 +230,16 @@ def collect_json_files(json_dir: Path, limit: int | None) -> list[Path]:
     if limit is not None:
         return json_paths[:limit]
     return json_paths
+
+
+def collect_images(image_dir: Path, image_exts: list[str]) -> list[Path]:
+    """Collect sorted image files from one directory."""
+    if not image_dir.is_dir():
+        raise FileNotFoundError(f"Image directory does not exist: {image_dir}")
+    image_ext_set = set(image_exts)
+    return sorted(
+        path for path in image_dir.iterdir() if path.is_file() and path.suffix.lower() in image_ext_set
+    )
 
 
 def load_auto_json(json_path: Path) -> dict[str, Any]:
@@ -512,6 +528,22 @@ def write_label_file(labels: list[LabelRecord], output_label_path: Path) -> None
     output_label_path.write_text(label_text, encoding="utf-8")
 
 
+def ensure_empty_labels_for_all_images(
+    image_dir: Path,
+    out_label_dir: Path,
+    image_exts: list[str],
+    summary: Summary,
+) -> None:
+    """Create empty YOLO txt files for images that have no generated label file."""
+    for image_path in collect_images(image_dir, image_exts):
+        output_label_path = out_label_dir / f"{image_path.stem}.txt"
+        if output_label_path.exists():
+            continue
+        write_label_file([], output_label_path)
+        summary.empty_label_files += 1
+        summary.ensured_empty_label_files += 1
+
+
 def write_stats_csv(summary: Summary, id_to_name: dict[int, str], stats_csv: Path) -> None:
     """Write summary and per-class label counts to CSV."""
     stats_csv.parent.mkdir(parents=True, exist_ok=True)
@@ -527,6 +559,7 @@ def write_stats_csv(summary: Summary, id_to_name: dict[int, str], stats_csv: Pat
         ("summary", "", "", "skipped_invalid_bbox", summary.skipped_invalid_bbox),
         ("summary", "", "", "skipped_small_box", summary.skipped_small_box),
         ("summary", "", "", "empty_label_files", summary.empty_label_files),
+        ("summary", "", "", "ensured_empty_label_files", summary.ensured_empty_label_files),
         ("summary", "", "", "copied_images", summary.copied_images),
     ]
 
@@ -560,6 +593,7 @@ def print_summary(summary: Summary) -> None:
     print(f"- skipped_invalid_bbox: {summary.skipped_invalid_bbox}")
     print(f"- skipped_small_box: {summary.skipped_small_box}")
     print(f"- empty_label_files: {summary.empty_label_files}")
+    print(f"- ensured_empty_label_files: {summary.ensured_empty_label_files}")
     print(f"- output_label_dir: {summary.output_label_dir}")
 
 
@@ -659,6 +693,14 @@ def run(args: argparse.Namespace) -> Summary:
         failure_log = out_label_dir / "auto_label_generation_failures.txt"
         failure_log.write_text("\n".join(failure_records) + "\n", encoding="utf-8")
         print(f"[INFO] Wrote failure log: {failure_log.as_posix()}")
+
+    if args.ensure_all_images:
+        ensure_empty_labels_for_all_images(
+            image_dir=image_dir,
+            out_label_dir=out_label_dir,
+            image_exts=image_exts,
+            summary=summary,
+        )
 
     write_stats_csv(summary, id_to_name, stats_csv)
     return summary

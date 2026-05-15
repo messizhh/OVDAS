@@ -473,6 +473,143 @@ python3 tools/evaluate_auto_labels.py \
 
 脚本以 `--pred-label-dir` 中的自动标签 txt 作为评估集合，适合 val_debug 这种只处理前 20 张图片的实验。空标签、缺少人工标签、非法标签行和单张图片失败都会记录统计并继续处理。
 
+## Train 自动标签生成流程
+
+本节用于准备完整 train 集自动标签数据。不要在本地 WSL 运行 train 全量 Grounding DINO、SAM refine 或 YOLO 训练；这些步骤必须在远程 GPU 服务器执行。本地 WSL 只负责代码开发、参数检查和轻量调试。
+
+服务器上建议按以下顺序运行。所有脚本都会从任意调用位置自动切到项目根目录，并把日志写入 `logs/`；如果服务器中断，可以重新运行。Grounding DINO 和 SAM 已存在的 JSON 会跳过；自动标签和 YOLO 配置会安全覆盖或补齐，缺失的 train label 会补为空 txt。
+
+A. Grounding DINO train 全量推理：
+
+```bash
+bash scripts/server_run_grounding_dino_train.sh
+```
+
+默认输入和输出：
+
+```text
+data/processed/visdrone/images/train
+outputs/grounding_dino_json/train
+```
+
+默认 prompt 和阈值：
+
+```text
+pedestrian. people. bicycle. car. van. truck. bus. motor.
+box_threshold = 0.35
+text_threshold = 0.25
+device = cuda
+```
+
+脚本默认使用：
+
+```text
+external/GroundingDINO/groundingdino/config/GroundingDINO_SwinT_OGC.py
+checkpoints/groundingdino_swint_ogc.pth
+```
+
+如服务器路径不同，可通过环境变量覆盖：
+
+```bash
+DINO_CONFIG_FILE=... DINO_CHECKPOINT=... bash scripts/server_run_grounding_dino_train.sh
+```
+
+B. SAM refine train：
+
+```bash
+bash scripts/server_run_sam_refine_train.sh
+```
+
+默认输入和输出：
+
+```text
+data/processed/visdrone/images/train
+outputs/grounding_dino_json/train
+outputs/sam_refine_json/train
+results/visualizations/sam_refine_train
+```
+
+脚本默认使用 `checkpoints/sam_vit_h_4b8939.pth`、`vit_h` 和 `cuda`。如服务器 checkpoint 路径不同，可通过环境变量覆盖：
+
+```bash
+SAM_CHECKPOINT=... bash scripts/server_run_sam_refine_train.sh
+```
+
+C. 生成 train 自动 YOLO 标签：
+
+```bash
+bash scripts/server_generate_auto_labels_train.sh
+```
+
+该脚本会生成两套 train 自动标签：
+
+```text
+outputs/auto_labels/dino_only/train
+outputs/auto_labels/dino_sam/train
+```
+
+统计 CSV：
+
+```text
+results/tables/auto_label_stats_train_dino_only.csv
+results/tables/auto_label_stats_train_dino_sam.csv
+```
+
+DINO-only 使用 `bbox_xyxy`；DINO+SAM 优先使用 `refined_bbox_xyxy`，缺失或非法时 fallback 到 `bbox_xyxy`。脚本会为没有输出标签的 train 图片补空 txt，保证后续 YOLO train images 和 labels 一一对应。
+
+默认会重新生成 label 以得到完整统计 CSV；如果只想跳过已有 txt，可使用：
+
+```bash
+SKIP_EXISTING_LABELS=1 bash scripts/server_generate_auto_labels_train.sh
+```
+
+D. 准备自动标签 YOLO 数据集：
+
+```bash
+bash scripts/server_prepare_auto_yolo_dataset.sh
+```
+
+该脚本默认用软链接构造两套 YOLO 数据集：
+
+```text
+data/processed/visdrone_auto_yolo_dino_only/
+data/processed/visdrone_auto_yolo_dino_sam/
+```
+
+每套数据集结构为：
+
+```text
+images/train
+images/val
+labels/train
+labels/val
+```
+
+其中 train 使用自动标签，val 仍使用人工标签，便于评估自动标签训练出的检测模型：
+
+```text
+train images: data/processed/visdrone/images/train
+train labels: outputs/auto_labels/dino_only/train 或 outputs/auto_labels/dino_sam/train
+val images:   data/processed/visdrone/images/val
+val labels:   data/processed/visdrone/labels/val
+```
+
+同时生成或更新 YOLO 配置：
+
+```text
+configs/yolo_visdrone_auto_dino_only.yaml
+configs/yolo_visdrone_auto_dino_sam.yaml
+```
+
+E. 后续自动标签 YOLO 训练：
+
+本轮不启动 YOLO 自动标签训练。后续训练只需使用上面两份配置作为数据入口：
+
+```text
+configs/yolo_visdrone_auto_dino_only.yaml
+configs/yolo_visdrone_auto_dino_sam.yaml
+```
+
 ## Day 8 YOLO 训练准备
 
 Day 8 只准备 YOLO 数据配置和服务器脚本，不在本地 WSL 运行正式训练。`data/processed/`、`runs/` 和大规模中间结果都不应提交 Git。
@@ -523,23 +660,18 @@ yolo detect train \
 自动标签训练脚本已经准备好，但现在不能直接正式运行。必须先对 train 集完成 Grounding DINO、SAM refine 和 auto label 生成，并整理为以下 YOLO 数据目录：
 
 ```text
-data/processed/visdrone_auto_sam_refine/images/train
-data/processed/visdrone_auto_sam_refine/labels/train
-data/processed/visdrone_auto_sam_refine/images/val
-data/processed/visdrone_auto_sam_refine/labels/val
+data/processed/visdrone_auto_yolo_dino_only/images/train
+data/processed/visdrone_auto_yolo_dino_only/labels/train
+data/processed/visdrone_auto_yolo_dino_only/images/val
+data/processed/visdrone_auto_yolo_dino_only/labels/val
 
-data/processed/visdrone_auto_dino/images/train
-data/processed/visdrone_auto_dino/labels/train
-data/processed/visdrone_auto_dino/images/val
-data/processed/visdrone_auto_dino/labels/val
+data/processed/visdrone_auto_yolo_dino_sam/images/train
+data/processed/visdrone_auto_yolo_dino_sam/labels/train
+data/processed/visdrone_auto_yolo_dino_sam/images/val
+data/processed/visdrone_auto_yolo_dino_sam/labels/val
 ```
 
-当前 `outputs/auto_labels/*_val_debug/labels` 只是 val_debug 的 20 张样本，不能用于正式训练。自动标签数据准备完成后，服务器训练命令为：
-
-```bash
-bash scripts/server_train_yolo_auto_sam_refine.sh
-bash scripts/server_train_yolo_auto_dino.sh
-```
+当前 `outputs/auto_labels/*_val_debug/labels` 只是 val_debug 的 20 张样本，不能用于正式训练。train 自动标签数据准备完成后，后续自动标签 YOLO 训练应使用 `configs/yolo_visdrone_auto_dino_only.yaml` 和 `configs/yolo_visdrone_auto_dino_sam.yaml`；本轮不把训练命令作为默认执行流程。
 
 如需在服务器上快速检查命令和环境，可以手动把训练命令临时改成 `epochs=1`，并使用小样本数据目录；正式脚本默认保留 100 epochs，用于课程实验结果。
 
