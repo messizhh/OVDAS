@@ -231,14 +231,96 @@ outputs/grounding_dino_json/val_debug/<image_stem>_grounding_dino.jpg
 
 `--skip-existing` 会在对应 JSON 已存在时跳过该图片，方便服务器中断后续跑。`outputs/` 是大规模中间结果目录，已被 `.gitignore` 排除，不要提交或打包全量推理结果；最终报告只保留少量关键 JSON、CSV 或可视化示例即可。
 
-## 后续运行命令占位
+## Day 5 SAM bbox 修正
 
-以下命令是后续开发占位，不应在 Day 4 运行 SAM、自动标签生成或 YOLO 训练。
+SAM refine 读取 Day 4 的 Grounding DINO JSON，从每个 detection 的 `bbox_xyxy` 调用 SAM 生成 mask，再由 mask 反推 `refined_bbox_xyxy`。输出 JSON 会保留原始 `bbox_xyxy`、`score`、`phrase` 等字段，并新增：
+
+```text
+refined_bbox_xyxy
+mask_area
+sam_score
+mask_path
+refine_status
+```
+
+默认不保存每个 mask PNG，避免 `outputs/` 过大；需要检查 mask 时再加 `--save-mask --mask-output-dir ...`。
+
+服务器运行前需要确保已安装 SAM Python 包，并将 SAM 权重放到 `--sam-checkpoint` 指定路径，例如：
 
 ```bash
-# Day 5: SAM 修正，待实现
-python3 tools/run_sam_refine_batch.py --config configs/default.yaml
+pip install git+https://github.com/facebookresearch/segment-anything.git
+```
 
+单图调试命令如下。真实 SAM 推理建议在远程 GPU 服务器运行；本地 WSL 主要用于 `--help`、语法检查和极少量样本验证。
+
+```bash
+python3 tools/run_sam_refine_single.py \
+  --image data/processed/visdrone/images/val/0000001_02999_d_0000005.jpg \
+  --dino-json outputs/grounding_dino_json/val_debug/0000001_02999_d_0000005_grounding_dino.json \
+  --output-json outputs/sam_refine_json/val_debug/0000001_02999_d_0000005_sam_refine.json \
+  --vis-output results/visualizations/sam_refine_val_debug/0000001_02999_d_0000005_sam_refine.jpg \
+  --sam-checkpoint checkpoints/sam_vit_h_4b8939.pth \
+  --model-type vit_h \
+  --device cuda
+```
+
+服务器 val debug 推荐先对 Day 4 debug 输出跑前 20 张：
+
+```bash
+bash scripts/server_run_sam_refine_val_debug.sh
+```
+
+等价完整命令如下：
+
+```bash
+python3 tools/run_sam_refine_batch.py \
+  --image-dir data/processed/visdrone/images/val \
+  --dino-json-dir outputs/grounding_dino_json/val_debug \
+  --output-json-dir outputs/sam_refine_json/val_debug \
+  --vis-output-dir results/visualizations/sam_refine_val_debug \
+  --sam-checkpoint checkpoints/sam_vit_h_4b8939.pth \
+  --model-type vit_h \
+  --device cuda \
+  --limit 20 \
+  --skip-existing
+```
+
+如需保存 mask PNG：
+
+```bash
+python3 tools/run_sam_refine_batch.py \
+  --image-dir data/processed/visdrone/images/val \
+  --dino-json-dir outputs/grounding_dino_json/val_debug \
+  --output-json-dir outputs/sam_refine_json/val_debug \
+  --vis-output-dir results/visualizations/sam_refine_val_debug \
+  --sam-checkpoint checkpoints/sam_vit_h_4b8939.pth \
+  --model-type vit_h \
+  --device cuda \
+  --limit 20 \
+  --skip-existing \
+  --save-mask \
+  --mask-output-dir outputs/sam_masks/val_debug
+```
+
+batch 脚本会输出 summary：
+
+```text
+total_images
+processed_images
+skipped_images
+failed_images
+total_detections
+refined_detections
+output_dir
+```
+
+空 detections 会正常生成空结果和可视化图；单张图片失败会记录到 `outputs/sam_refine_json/val_debug/sam_refine_batch_failures.txt`，不会中断整个 batch。
+
+## 后续运行命令占位
+
+以下命令是后续开发占位，不应在 Day 5 运行自动标签生成或 YOLO 训练。
+
+```bash
 # Day 6: 自动标签生成，待实现
 python3 tools/generate_yolo_labels_from_auto.py --config configs/default.yaml
 
