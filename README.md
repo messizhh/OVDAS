@@ -732,14 +732,121 @@ results/yolo_eval/auto_sam_refine_val
 results/yolo_eval/auto_dino_val
 ```
 
-## 后续运行命令占位
+## Day 11 小目标专项分析
 
-以下命令是后续开发占位，不应在 Day 8 本地运行 YOLO 训练或后续小目标分析。
+小目标专项分析用于回答报告中的核心问题：manual、DINO-only 和 DINO+SAM 三个 YOLO 模型在 VisDrone val 集上对 small / medium / large 目标的检测差异。该分析不重新训练模型，只读取人工 val 标签和 YOLO prediction txt，按类别、尺寸和类别-尺寸交叉统计 precision / recall / FP / FN，并导出小目标漏检失败案例。
+
+先在服务器上为三个模型生成 YOLO prediction txt。`save_txt=True save_conf=True` 会把预测框保存为 `class_id cx cy w h conf`，输出目录会被后续分析脚本读取：
 
 ```bash
-# Day 11: 小目标专项分析，待实现
-python3 tools/analyze_small_objects.py --config configs/default.yaml
+yolo detect predict \
+  model=runs/yolov8s_manual_visdrone/weights/best.pt \
+  source=data/processed/visdrone/images/val \
+  imgsz=1024 \
+  conf=0.25 \
+  device=0 \
+  save_txt=True \
+  save_conf=True \
+  project=results/yolo_predictions \
+  name=manual \
+  exist_ok=True
+
+yolo detect predict \
+  model=runs/yolov8s_auto_dino_only_visdrone/weights/best.pt \
+  source=data/processed/visdrone/images/val \
+  imgsz=1024 \
+  conf=0.25 \
+  device=0 \
+  save_txt=True \
+  save_conf=True \
+  project=results/yolo_predictions \
+  name=auto_dino_only \
+  exist_ok=True
+
+yolo detect predict \
+  model=runs/yolov8s_auto_dino_sam_visdrone/weights/best.pt \
+  source=data/processed/visdrone/images/val \
+  imgsz=1024 \
+  conf=0.25 \
+  device=0 \
+  save_txt=True \
+  save_conf=True \
+  project=results/yolo_predictions \
+  name=auto_dino_sam \
+  exist_ok=True
 ```
+
+如果服务器上的 run 名称不同，只需要替换上面 `model=` 的权重路径；后续分析脚本默认读取以下 prediction labels：
+
+```text
+results/yolo_predictions/manual/labels
+results/yolo_predictions/auto_dino_only/labels
+results/yolo_predictions/auto_dino_sam/labels
+```
+
+生成 prediction txt 后运行：
+
+```bash
+bash scripts/server_analyze_small_objects.sh
+```
+
+也可以单独分析某一个模型：
+
+```bash
+python3 tools/analyze_small_objects.py \
+  --image-dir data/processed/visdrone/images/val \
+  --label-dir data/processed/visdrone/labels/val \
+  --pred-dir results/yolo_predictions/manual/labels \
+  --class-names configs/classes_visdrone.yaml \
+  --output-dir results/tables/small_object_analysis_manual \
+  --vis-dir results/visualizations/small_object_failures/manual \
+  --model-name manual \
+  --iou-threshold 0.5 \
+  --size-mode coco \
+  --save-visualizations \
+  --max-vis 50
+```
+
+输出文件：
+
+```text
+results/tables/small_object_analysis_manual/summary.csv
+results/tables/small_object_analysis_manual/by_size.csv
+results/tables/small_object_analysis_manual/by_class.csv
+results/tables/small_object_analysis_manual/by_class_size.csv
+results/tables/small_object_analysis_manual/failure_cases.csv
+
+results/tables/small_object_analysis_auto_dino_only/
+results/tables/small_object_analysis_auto_dino_sam/
+
+results/visualizations/small_object_failures/manual/
+results/visualizations/small_object_failures/auto_dino_only/
+results/visualizations/small_object_failures/auto_dino_sam/
+```
+
+默认尺寸划分使用 COCO 绝对像素面积：
+
+```text
+small: area < 32 * 32
+medium: 32 * 32 <= area < 96 * 96
+large: area >= 96 * 96
+```
+
+如需使用相对面积划分，可设置 `--size-mode relative` 或：
+
+```bash
+SIZE_MODE=relative bash scripts/server_analyze_small_objects.sh
+```
+
+相对面积规则为：
+
+```text
+small: bbox_area / image_area < 0.001
+medium: 0.001 <= bbox_area / image_area < 0.01
+large: bbox_area / image_area >= 0.01
+```
+
+本地 WSL 只建议运行 `python3 tools/analyze_small_objects.py --help`、`python3 -m py_compile ...` 或 `--limit 1` 的小样本结构检查，不要在本地重新跑全量 YOLO 推理。
 
 ## 结果目录
 
