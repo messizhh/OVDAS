@@ -848,6 +848,129 @@ large: bbox_area / image_area >= 0.01
 
 本地 WSL 只建议运行 `python3 tools/analyze_small_objects.py --help`、`python3 -m py_compile ...` 或 `--limit 1` 的小样本结构检查，不要在本地重新跑全量 YOLO 推理。
 
+## Day 12 可视化整理
+
+### 主要实验结果
+
+当前 YOLOv8s 三模型在 VisDrone val 集上的主指标如下，完整 CSV 已整理到 `results/tables/`。如果权重校验发现 auto 模型与 manual 模型参数完全一致，这些旧指标只能作为历史记录，不能作为最终报告结论；应按“重新训练后的可信性校验流程”重新训练并刷新结果。
+
+| Model | Training labels | Precision | Recall | mAP@0.5 | mAP@0.5:0.95 |
+| --- | --- | ---: | ---: | ---: | ---: |
+| manual | manual | 0.649 | 0.526 | 0.564 | 0.352 |
+| dino_only | DINO-only auto labels | 0.645 | 0.527 | 0.563 | 0.350 |
+| dino_sam | DINO+SAM auto labels | 0.645 | 0.527 | 0.563 | 0.350 |
+
+标准化结果表包括：
+
+```text
+results/tables/yolo_manual_baseline.csv
+results/tables/yolo_auto_label_results.csv
+results/tables/yolo_three_model_comparison.csv
+results/tables/small_object_analysis.csv
+results/tables/ablation_method.csv
+results/tables/ablation_threshold.csv
+results/tables/ablation_prompt.csv
+results/tables/auto_label_quality.csv
+```
+
+本地仓库如果还没有服务器导出的 `small_object_analysis.csv`、`ablation_threshold.csv`、`ablation_prompt.csv` 或 `auto_label_quality.csv` 数值，可以先保留现有模板字段；服务器结果复制回来后直接覆盖同名 CSV，再重新生成图表。
+
+### 生成报告图表
+
+图表生成不依赖 notebook，不会训练模型，也不会进行 YOLO 推理。运行：
+
+```bash
+python3 tools/make_report_figures.py \
+  --table-dir results/tables \
+  --output-dir figures/charts
+```
+
+输出图表：
+
+```text
+figures/charts/yolo_main_metrics.png
+figures/charts/three_model_map_comparison.png
+figures/charts/small_object_recall.png
+figures/charts/ablation_method.png
+figures/charts/ablation_threshold.png
+figures/charts/ablation_prompt.png
+```
+
+脚本会同时复制报告引用副本：
+
+```text
+report/tables/
+report/figures/
+```
+
+如果某个 CSV 只有模板字段、没有有效数值，脚本会生成带说明的占位图；填入真实服务器结果后重新运行同一命令即可刷新报告图。
+
+## 重新训练后的可信性校验流程
+
+如果发现 `auto_dino_only` / `auto_dino_sam` 的 `best.pt` 或 `last.pt` 与 manual 模型参数完全一致，说明此前三模型对比、自动标签 YOLO 对比、小目标三模型对比和 Day 10 消融图不能作为最终可信结果。重新训练后必须先做权重参数级校验，再重新导出验证结果和 prediction txt。
+
+权重校验脚本读取 checkpoint 中实际模型张量，计算 `state_hash`，并两两比较：
+
+```text
+same_keys
+checked_tensors
+diff_tensors
+overall_max_abs_diff
+```
+
+如果任意两个模型 `diff_tensors == 0` 且 `overall_max_abs_diff == 0`，脚本会输出 `WARNING`，并在 `results/tables/yolo_weight_hash_check.csv` 中标记 `IDENTICAL_WEIGHTS`。
+
+推荐服务器执行顺序如下。
+
+1. 重新训练 DINO-only：
+
+```bash
+BATCH=16 RUN_DINO_ONLY=1 RUN_DINO_SAM=0 bash scripts/server_train_yolo_auto.sh
+```
+
+2. 训练后立即检查 manual / DINO-only / DINO+SAM 三个权重：
+
+```bash
+bash scripts/server_check_yolo_weights.sh
+```
+
+3. 重新训练 DINO+SAM：
+
+```bash
+BATCH=16 RUN_DINO_ONLY=0 RUN_DINO_SAM=1 bash scripts/server_train_yolo_auto.sh
+```
+
+4. 再次检查三模型权重是否已经区分开：
+
+```bash
+bash scripts/server_check_yolo_weights.sh
+```
+
+5. 重新执行 val、prediction 导出、小目标分析和报告图表刷新：
+
+```bash
+bash scripts/server_after_retrain_analysis.sh
+```
+
+其中 `scripts/server_run_yolo_val_and_predictions.sh` 会先删除旧的 `results/yolo_predictions/`，避免复用旧预测，然后固定输出：
+
+```text
+results/yolo_eval/manual_val
+results/yolo_eval/auto_dino_only_val
+results/yolo_eval/auto_dino_sam_val
+results/yolo_predictions/manual
+results/yolo_predictions/auto_dino_only
+results/yolo_predictions/auto_dino_sam
+```
+
+可通过环境变量覆盖：
+
+```bash
+IMGSZ=1024 BATCH=16 DEVICE=0 CONF=0.25 bash scripts/server_run_yolo_val_and_predictions.sh
+```
+
+注意：这些脚本不会自动删除 `runs/` 里的权重；如果校验仍提示 `IDENTICAL_WEIGHTS`，后续图表只能用于流程检查，不能作为报告最终结论。
+
 ## 结果目录
 
 - `outputs/`: 保存中间输出，如 Grounding DINO JSON、SAM masks、自动标签和调试结果。
