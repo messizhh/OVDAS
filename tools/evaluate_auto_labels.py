@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import json
 import struct
 import sys
 from dataclasses import dataclass
@@ -11,6 +12,12 @@ from pathlib import Path
 from typing import Any
 
 import yaml
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
+from src.utils.image_lists import read_image_list, resolve_image_entries
 
 
 DEFAULT_IMAGE_EXTS = (".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff")
@@ -73,6 +80,14 @@ class MetricStats:
             return 0.0
         return self.iou_sum / self.matched_count
 
+    @property
+    def f1(self) -> float:
+        """Return F1 score with zero-safe division."""
+        denominator = self.precision + self.recall
+        if denominator == 0.0:
+            return 0.0
+        return 2.0 * self.precision * self.recall / denominator
+
 
 @dataclass
 class EvalSummary:
@@ -86,6 +101,8 @@ class EvalSummary:
     missing_pred_label_files: int = 0
     invalid_gt_label_lines: int = 0
     invalid_pred_label_lines: int = 0
+    inference_time_sum: float = 0.0
+    inference_time_images: int = 0
 
 
 def parse_args() -> argparse.Namespace:
@@ -96,6 +113,26 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--gt-label-dir", required=True, help="Manual YOLO label directory.")
     parser.add_argument("--pred-label-dir", required=True, help="Automatic YOLO label directory.")
     parser.add_argument("--image-dir", required=True, help="Image directory for size lookup.")
+    parser.add_argument(
+        "--image-list",
+        default=None,
+        help="Optional txt/json image list. When set, evaluate exactly these images.",
+    )
+    parser.add_argument(
+        "--metadata-json-dir",
+        default=None,
+        help="Optional auto JSON directory used to compute average inference time.",
+    )
+    parser.add_argument(
+        "--method-name",
+        default=None,
+        help="Optional method name column for ablation CSV aggregation.",
+    )
+    parser.add_argument(
+        "--append-csv",
+        action="store_true",
+        help="Append rows to existing CSV files instead of overwriting them.",
+    )
     parser.add_argument(
         "--classes-config",
         default="configs/classes_visdrone.yaml",
@@ -166,6 +203,18 @@ def collect_pred_label_files(pred_label_dir: Path, limit: int | None) -> list[Pa
         and path.suffix == ".txt"
         and not path.name.endswith("_failures.txt")
     )
+    if limit is not None:
+        return label_files[:limit]
+    return label_files
+
+
+def collect_pred_label_files_for_images(
+    pred_label_dir: Path,
+    image_paths: list[Path],
+    limit: int | None,
+) -> list[Path]:
+    """Build prediction label paths for a fixed image subset."""
+    label_files = [pred_label_dir / f"{image_path.stem}.txt" for image_path in image_paths]
     if limit is not None:
         return label_files[:limit]
     return label_files
@@ -396,6 +445,51 @@ def greedy_match(
     return matches
 
 
+def metadata_json_path_for_stem(metadata_json_dir: Path, stem: str) -> Path | None:
+    """Resolve a metadata JSON path for one image stem."""
+    candidates = [
+        metadata_json_dir / f"{stem}_sam_refine.json",
+        metadata_json_dir / f"{stem}_grounding_dino.json",
+        metadata_json_dir / f"{stem}_grounding_dino_tiled.json",
+        metadata_json_dir / f"{stem}.json",
+    ]
+    for candidate in candidates:
+        if candidate.is_file():
+            return candidate
+    return None
+
+
+def extract_inference_time(data: dict[str, Any]) -> float | None:
+    """Extract an inference-time value from supported JSON metadata fields."""
+    for key in ("total_inference_time_sec", "inference_time_sec"):
+        value = data.get(key)
+        if isinstance(value, (float, int)):
+            return float(value)
+
+    tiled = data.get("tiled_inference")
+    if isinstance(tiled, dict) and isinstance(tiled.get("inference_time_sec"), (float, int)):
+        return float(tiled["inference_time_sec"])
+
+    sam_refine = data.get("sam_refine")
+    if isinstance(sam_refine, dict) and isinstance(sam_refine.get("sam_inference_time_sec"), (float, int)):
+        return float(sam_refine["sam_inference_time_sec"])
+    return None
+
+
+def read_inference_time(metadata_json_dir: Path, stem: str) -> float | None:
+    """Read inference time for one image when metadata is available."""
+    json_path = metadata_json_path_for_stem(metadata_json_dir, stem)
+    if json_path is None:
+        return None
+    try:
+        data = json.loads(json_path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    return extract_inference_time(data)
+
+
 def size_bucket(box: Box) -> str:
     """Return COCO-style size bucket for one box."""
     area = box.area
@@ -470,8 +564,21 @@ def metric_row(stats: MetricStats) -> dict[str, Any]:
         "false_negative_count": stats.false_negative_count,
         "precision": f"{stats.precision:.6f}",
         "recall": f"{stats.recall:.6f}",
+        "f1": f"{stats.f1:.6f}",
         "mean_iou": f"{stats.mean_iou:.6f}",
     }
+
+
+def write_rows(output_path: Path, fieldnames: list[str], rows: list[dict[str, Any]], append_csv: bool) -> None:
+    """Write or append CSV rows with a stable header."""
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    write_header = not append_csv or not output_path.is_file() or output_path.stat().st_size == 0
+    mode = "a" if append_csv else "w"
+    with output_path.open(mode, encoding="utf-8", newline="") as file:
+        writer = csv.DictWriter(file, fieldnames=fieldnames)
+        if write_header:
+            writer.writeheader()
+        writer.writerows(rows)
 
 
 def write_summary_csv(
@@ -479,9 +586,17 @@ def write_summary_csv(
     overall_stats: MetricStats,
     eval_summary: EvalSummary,
     iou_threshold: float,
+    method_name: str | None = None,
+    append_csv: bool = False,
 ) -> None:
     """Write one-row overall summary CSV."""
-    output_path.parent.mkdir(parents=True, exist_ok=True)
+    average_predictions = 0.0
+    if eval_summary.evaluated_images > 0:
+        average_predictions = overall_stats.pred_count / eval_summary.evaluated_images
+    average_inference_time: str | float = ""
+    if eval_summary.inference_time_images > 0:
+        average_inference_time = f"{eval_summary.inference_time_sum / eval_summary.inference_time_images:.6f}"
+
     row = {
         **metric_row(overall_stats),
         "total_label_files": eval_summary.total_label_files,
@@ -493,20 +608,23 @@ def write_summary_csv(
         "invalid_gt_label_lines": eval_summary.invalid_gt_label_lines,
         "invalid_pred_label_lines": eval_summary.invalid_pred_label_lines,
         "iou_threshold": f"{iou_threshold:.6f}",
+        "average_predictions_per_image": f"{average_predictions:.6f}",
+        "average_inference_time_sec": average_inference_time,
+        "inference_time_images": eval_summary.inference_time_images,
     }
-    with output_path.open("w", encoding="utf-8", newline="") as file:
-        writer = csv.DictWriter(file, fieldnames=list(row.keys()))
-        writer.writeheader()
-        writer.writerow(row)
+    if method_name is not None:
+        row = {"method": method_name, **row}
+    write_rows(output_path, list(row.keys()), [row], append_csv)
 
 
 def write_class_csv(
     output_path: Path,
     class_stats: dict[int, MetricStats],
     class_names: dict[int, str],
+    method_name: str | None = None,
+    append_csv: bool = False,
 ) -> None:
     """Write per-class metrics CSV."""
-    output_path.parent.mkdir(parents=True, exist_ok=True)
     fieldnames = [
         "class_id",
         "class_name",
@@ -517,25 +635,32 @@ def write_class_csv(
         "false_negative_count",
         "precision",
         "recall",
+        "f1",
         "mean_iou",
     ]
-    with output_path.open("w", encoding="utf-8", newline="") as file:
-        writer = csv.DictWriter(file, fieldnames=fieldnames)
-        writer.writeheader()
-        for class_id in sorted(class_names):
-            stats = class_stats.get(class_id, MetricStats())
-            writer.writerow(
-                {
-                    "class_id": class_id,
-                    "class_name": class_names[class_id],
-                    **metric_row(stats),
-                }
-            )
+    rows: list[dict[str, Any]] = []
+    for class_id in sorted(class_names):
+        stats = class_stats.get(class_id, MetricStats())
+        row = {
+            "class_id": class_id,
+            "class_name": class_names[class_id],
+            **metric_row(stats),
+        }
+        if method_name is not None:
+            row = {"method": method_name, **row}
+        rows.append(row)
+    if method_name is not None:
+        fieldnames = ["method", *fieldnames]
+    write_rows(output_path, fieldnames, rows, append_csv)
 
 
-def write_size_csv(output_path: Path, size_stats: dict[str, MetricStats]) -> None:
+def write_size_csv(
+    output_path: Path,
+    size_stats: dict[str, MetricStats],
+    method_name: str | None = None,
+    append_csv: bool = False,
+) -> None:
     """Write COCO-style size-bucket metrics CSV."""
-    output_path.parent.mkdir(parents=True, exist_ok=True)
     fieldnames = [
         "size",
         "gt_count",
@@ -545,17 +670,25 @@ def write_size_csv(output_path: Path, size_stats: dict[str, MetricStats]) -> Non
         "false_negative_count",
         "precision",
         "recall",
+        "f1",
         "mean_iou",
     ]
-    with output_path.open("w", encoding="utf-8", newline="") as file:
-        writer = csv.DictWriter(file, fieldnames=fieldnames)
-        writer.writeheader()
-        for bucket in SIZE_BUCKETS:
-            writer.writerow({"size": bucket, **metric_row(size_stats[bucket])})
+    rows: list[dict[str, Any]] = []
+    for bucket in SIZE_BUCKETS:
+        row = {"size": bucket, **metric_row(size_stats[bucket])}
+        if method_name is not None:
+            row = {"method": method_name, **row}
+        rows.append(row)
+    if method_name is not None:
+        fieldnames = ["method", *fieldnames]
+    write_rows(output_path, fieldnames, rows, append_csv)
 
 
 def print_summary(overall_stats: MetricStats, eval_summary: EvalSummary) -> None:
     """Print concise evaluation summary."""
+    average_predictions = 0.0
+    if eval_summary.evaluated_images > 0:
+        average_predictions = overall_stats.pred_count / eval_summary.evaluated_images
     print("Auto-label quality evaluation summary:")
     print(f"- gt_count: {overall_stats.gt_count}")
     print(f"- pred_count: {overall_stats.pred_count}")
@@ -564,7 +697,14 @@ def print_summary(overall_stats: MetricStats, eval_summary: EvalSummary) -> None
     print(f"- false_negative_count: {overall_stats.false_negative_count}")
     print(f"- precision: {overall_stats.precision:.6f}")
     print(f"- recall: {overall_stats.recall:.6f}")
+    print(f"- f1: {overall_stats.f1:.6f}")
     print(f"- mean_iou: {overall_stats.mean_iou:.6f}")
+    print(f"- average_predictions_per_image: {average_predictions:.6f}")
+    if eval_summary.inference_time_images > 0:
+        average_time = eval_summary.inference_time_sum / eval_summary.inference_time_images
+        print(f"- average_inference_time_sec: {average_time:.6f}")
+    else:
+        print("- average_inference_time_sec: unavailable")
     print(f"- evaluated_images: {eval_summary.evaluated_images}")
     print(f"- failed_images: {eval_summary.failed_images}")
     print(f"- missing_images: {eval_summary.missing_images}")
@@ -590,14 +730,27 @@ def run(args: argparse.Namespace) -> tuple[MetricStats, EvalSummary]:
     gt_label_dir = Path(args.gt_label_dir)
     pred_label_dir = Path(args.pred_label_dir)
     image_dir = Path(args.image_dir)
+    metadata_json_dir = Path(args.metadata_json_dir) if args.metadata_json_dir else None
     if not gt_label_dir.is_dir():
         raise FileNotFoundError(f"GT label directory does not exist: {gt_label_dir}")
+    if not pred_label_dir.is_dir():
+        raise FileNotFoundError(f"Prediction label directory does not exist: {pred_label_dir}")
     if not image_dir.is_dir():
         raise FileNotFoundError(f"Image directory does not exist: {image_dir}")
+    if metadata_json_dir is not None and not metadata_json_dir.is_dir():
+        raise FileNotFoundError(f"Metadata JSON directory does not exist: {metadata_json_dir}")
 
     class_names = load_class_names(Path(args.classes_config))
     valid_class_ids = set(class_names)
-    pred_label_files = collect_pred_label_files(pred_label_dir, args.limit)
+    image_path_by_stem: dict[str, Path] = {}
+    if args.image_list:
+        image_paths = resolve_image_entries(image_dir, read_image_list(Path(args.image_list)), DEFAULT_IMAGE_EXTS)
+        if args.limit is not None:
+            image_paths = image_paths[: args.limit]
+        image_path_by_stem = {image_path.stem: image_path for image_path in image_paths}
+        pred_label_files = collect_pred_label_files_for_images(pred_label_dir, image_paths, None)
+    else:
+        pred_label_files = collect_pred_label_files(pred_label_dir, args.limit)
 
     overall_stats = MetricStats()
     class_stats = {class_id: MetricStats() for class_id in class_names}
@@ -608,7 +761,9 @@ def run(args: argparse.Namespace) -> tuple[MetricStats, EvalSummary]:
     for pred_label_path in pred_label_files:
         stem = pred_label_path.stem
         try:
-            image_path = resolve_image_path(image_dir, stem)
+            image_path = image_path_by_stem.get(stem)
+            if image_path is None:
+                image_path = resolve_image_path(image_dir, stem)
             if image_path is None:
                 eval_summary.missing_images += 1
                 raise FileNotFoundError(f"Image not found for label stem: {stem}")
@@ -648,6 +803,11 @@ def run(args: argparse.Namespace) -> tuple[MetricStats, EvalSummary]:
                 size_stats=size_stats,
             )
             eval_summary.evaluated_images += 1
+            if metadata_json_dir is not None:
+                inference_time = read_inference_time(metadata_json_dir, stem)
+                if inference_time is not None:
+                    eval_summary.inference_time_sum += inference_time
+                    eval_summary.inference_time_images += 1
         except Exception as exc:
             eval_summary.failed_images += 1
             message = f"{pred_label_path.as_posix()}: {exc}"
@@ -655,9 +815,27 @@ def run(args: argparse.Namespace) -> tuple[MetricStats, EvalSummary]:
             print(f"[WARN] Failed image skipped: {message}")
             continue
 
-    write_summary_csv(Path(args.out_summary_csv), overall_stats, eval_summary, args.iou_threshold)
-    write_class_csv(Path(args.out_class_csv), class_stats, class_names)
-    write_size_csv(Path(args.out_size_csv), size_stats)
+    write_summary_csv(
+        Path(args.out_summary_csv),
+        overall_stats,
+        eval_summary,
+        args.iou_threshold,
+        method_name=args.method_name,
+        append_csv=args.append_csv,
+    )
+    write_class_csv(
+        Path(args.out_class_csv),
+        class_stats,
+        class_names,
+        method_name=args.method_name,
+        append_csv=args.append_csv,
+    )
+    write_size_csv(
+        Path(args.out_size_csv),
+        size_stats,
+        method_name=args.method_name,
+        append_csv=args.append_csv,
+    )
     write_failure_log(Path(args.out_summary_csv), failure_records)
 
     return overall_stats, eval_summary

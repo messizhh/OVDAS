@@ -43,6 +43,12 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="Directory for mask PNG files. Required when --save-mask is set.",
     )
+    parser.add_argument(
+        "--min-refine-area-px",
+        type=float,
+        default=1024.0,
+        help="Skip SAM for boxes smaller than this pixel area and keep the original bbox.",
+    )
     return parser.parse_args()
 
 
@@ -83,6 +89,7 @@ def main() -> int:
             device=args.device,
             save_mask=args.save_mask,
             mask_output_dir=mask_output_dir,
+            min_refine_area_px=args.min_refine_area_px,
         )
         save_refined_json(output.result, output_json)
         save_refine_visualization(

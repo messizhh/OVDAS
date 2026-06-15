@@ -28,6 +28,9 @@ class GroundingDinoResult:
     text_threshold: float
     device: str
     detections: list[GroundingDinoDetection]
+    image_width: int | None = None
+    image_height: int | None = None
+    inference_time_sec: float | None = None
 
 
 def validate_input_paths(
@@ -211,6 +214,8 @@ class GroundingDinoPredictor:
             text_threshold=text_threshold,
             device=self.device,
             detections=detections,
+            image_width=image_width,
+            image_height=image_height,
         )
 
 

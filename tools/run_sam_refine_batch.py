@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import logging
 import sys
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -22,6 +23,7 @@ from src.segmentation.sam_refine import (
     save_refined_json,
     validate_refine_inputs,
 )
+from src.utils.image_lists import read_image_list, resolve_image_entries
 
 LOGGER = logging.getLogger(__name__)
 DEFAULT_IMAGE_EXTS = "jpg,jpeg,png,bmp,tif,tiff"
@@ -58,6 +60,11 @@ def parse_args() -> argparse.Namespace:
         description="Refine Grounding DINO JSON files with SAM bbox prompts."
     )
     parser.add_argument("--image-dir", required=True, help="Directory containing input images.")
+    parser.add_argument(
+        "--image-list",
+        default=None,
+        help="Optional txt/json image list. Entries may be image names or paths.",
+    )
     parser.add_argument(
         "--dino-json-dir",
         required=True,
@@ -102,6 +109,12 @@ def parse_args() -> argparse.Namespace:
         help="Directory for mask PNG files. Required when --save-mask is set.",
     )
     parser.add_argument(
+        "--min-refine-area-px",
+        type=float,
+        default=1024.0,
+        help="Skip SAM for boxes smaller than this pixel area and keep the original bbox.",
+    )
+    parser.add_argument(
         "--image-exts",
         default=DEFAULT_IMAGE_EXTS,
         help="Comma-separated image extensions, for example jpg,jpeg,png.",
@@ -117,31 +130,46 @@ def configure_logging() -> None:
     )
 
 
-def parse_image_exts(raw_exts: str) -> set[str]:
+def parse_image_exts(raw_exts: str) -> list[str]:
     """Parse a comma-separated extension list into normalized suffixes."""
-    exts: set[str] = set()
+    exts: list[str] = []
+    seen: set[str] = set()
     for item in raw_exts.split(","):
         ext = item.strip().lower()
         if not ext:
             continue
         if not ext.startswith("."):
             ext = f".{ext}"
-        exts.add(ext)
+        if ext in seen:
+            continue
+        exts.append(ext)
+        seen.add(ext)
     if not exts:
         raise ValueError("--image-exts must contain at least one extension.")
     return exts
 
 
-def collect_images(image_dir: Path, image_exts: set[str], limit: int | None) -> list[Path]:
+def collect_images(
+    image_dir: Path,
+    image_exts: list[str],
+    limit: int | None,
+    image_list: Path | None = None,
+) -> list[Path]:
     """Collect sorted image files from one directory."""
     if not image_dir.is_dir():
         raise FileNotFoundError(f"Image directory does not exist: {image_dir}")
     if limit is not None and limit <= 0:
         raise ValueError(f"--limit must be positive when provided, got {limit}")
 
-    image_paths = sorted(
-        path for path in image_dir.iterdir() if path.is_file() and path.suffix.lower() in image_exts
-    )
+    if image_list is not None:
+        image_paths = resolve_image_entries(image_dir, read_image_list(image_list), image_exts)
+    else:
+        image_ext_set = set(image_exts)
+        image_paths = sorted(
+            path
+            for path in image_dir.iterdir()
+            if path.is_file() and path.suffix.lower() in image_ext_set
+        )
     if limit is not None:
         return image_paths[:limit]
     return image_paths
@@ -204,8 +232,16 @@ def save_successful_output(
     output_json: Path,
     vis_output: Path,
     summary: BatchSummary,
+    sam_elapsed_sec: float = 0.0,
 ) -> None:
     """Save refined JSON and visualization, then update summary counters."""
+    sam_meta = output.result.setdefault("sam_refine", {})
+    sam_meta["sam_inference_time_sec"] = sam_elapsed_sec
+    input_dino_time = output.result.get("inference_time_sec")
+    if isinstance(input_dino_time, (float, int)):
+        output.result["total_inference_time_sec"] = float(input_dino_time) + sam_elapsed_sec
+    else:
+        output.result["total_inference_time_sec"] = sam_elapsed_sec
     save_refined_json(output.result, output_json)
     save_refine_visualization(
         image_path=image_path,
@@ -262,6 +298,7 @@ def prepare_pending_items(
                     checkpoint=checkpoint,
                     device=args.device,
                     save_mask=args.save_mask,
+                    min_refine_area_px=args.min_refine_area_px,
                 )
                 save_successful_output(
                     output=output,
@@ -269,6 +306,7 @@ def prepare_pending_items(
                     output_json=output_json,
                     vis_output=vis_output,
                     summary=summary,
+                    sam_elapsed_sec=0.0,
                 )
             except Exception as exc:
                 summary.failed_images += 1
@@ -297,20 +335,24 @@ def run_batch(args: argparse.Namespace) -> BatchSummary:
     output_json_dir = Path(args.output_json_dir)
     vis_output_dir = Path(args.vis_output_dir)
     image_exts = parse_image_exts(args.image_exts)
+    image_list = Path(args.image_list) if args.image_list else None
 
     if args.save_mask and not args.mask_output_dir:
         raise ValueError("--mask-output-dir is required when --save-mask is set.")
+    if args.min_refine_area_px < 0.0:
+        raise ValueError("--min-refine-area-px must be greater than or equal to 0.")
 
     output_json_dir.mkdir(parents=True, exist_ok=True)
     vis_output_dir.mkdir(parents=True, exist_ok=True)
 
-    image_paths = collect_images(image_dir, image_exts, args.limit)
+    image_paths = collect_images(image_dir, image_exts, args.limit, image_list=image_list)
     summary = BatchSummary(total_images=len(image_paths), output_dir=output_json_dir.as_posix())
     failure_records: list[str] = []
 
     LOGGER.info("Found %d image(s) in %s", len(image_paths), image_dir.as_posix())
     LOGGER.info("Refined JSON output directory: %s", output_json_dir.as_posix())
     LOGGER.info("Visualization output directory: %s", vis_output_dir.as_posix())
+    LOGGER.info("Minimum refine area: %.2f px", args.min_refine_area_px)
 
     pending_items = prepare_pending_items(
         image_paths=image_paths,
@@ -338,19 +380,23 @@ def run_batch(args: argparse.Namespace) -> BatchSummary:
             item.image_path.as_posix(),
         )
         try:
+            started_at = time.perf_counter()
             output = refiner.refine_loaded_json(
                 image_path=item.image_path,
                 dino_json_path=item.dino_json_path,
                 dino_data=item.dino_data,
                 save_mask=args.save_mask,
                 mask_output_dir=item.mask_output_dir,
+                min_refine_area_px=args.min_refine_area_px,
             )
+            sam_elapsed_sec = time.perf_counter() - started_at
             save_successful_output(
                 output=output,
                 image_path=item.image_path,
                 output_json=item.output_json,
                 vis_output=item.vis_output,
                 summary=summary,
+                sam_elapsed_sec=sam_elapsed_sec,
             )
         except Exception as exc:
             summary.failed_images += 1

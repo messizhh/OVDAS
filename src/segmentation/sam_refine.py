@@ -148,6 +148,7 @@ def build_result(
     checkpoint: Path,
     device: str,
     save_mask: bool,
+    min_refine_area_px: float = 0.0,
 ) -> dict[str, Any]:
     """Build the top-level refined JSON while preserving source fields."""
     result = dict(dino_data)
@@ -160,6 +161,7 @@ def build_result(
         "checkpoint": checkpoint.as_posix(),
         "device": device,
         "save_mask": save_mask,
+        "min_refine_area_px": min_refine_area_px,
     }
     return result
 
@@ -172,6 +174,7 @@ def build_empty_refine_output(
     checkpoint: Path,
     device: str,
     save_mask: bool,
+    min_refine_area_px: float = 0.0,
 ) -> SamRefineOutput:
     """Build a valid refined result for images with no detections."""
     result = build_result(
@@ -183,6 +186,7 @@ def build_empty_refine_output(
         checkpoint=checkpoint,
         device=device,
         save_mask=save_mask,
+        min_refine_area_px=min_refine_area_px,
     )
     return SamRefineOutput(
         result=result,
@@ -202,6 +206,29 @@ def save_mask_png(mask: Any, output_path: Path) -> None:
     output_path.parent.mkdir(parents=True, exist_ok=True)
     mask_image = (mask.astype("uint8") * 255)
     Image.fromarray(mask_image).save(output_path)
+
+
+def bbox_area_xyxy(bbox: list[float]) -> float:
+    """Return bbox area in pixels."""
+    return max(0.0, bbox[2] - bbox[0]) * max(0.0, bbox[3] - bbox[1])
+
+
+def fallback_detection(
+    detection: dict[str, Any],
+    fallback_bbox: Any,
+    status: str,
+) -> dict[str, Any]:
+    """Record a fallback refine result without dropping the detection."""
+    detection.update(
+        {
+            "refined_bbox_xyxy": fallback_bbox,
+            "mask_area": 0,
+            "sam_score": None,
+            "mask_path": None,
+            "refine_status": status,
+        }
+    )
+    return detection
 
 
 class SamBoxRefiner:
@@ -232,13 +259,15 @@ class SamBoxRefiner:
         dino_data: dict[str, Any],
         save_mask: bool = False,
         mask_output_dir: Path | None = None,
+        min_refine_area_px: float = 1024.0,
     ) -> SamRefineOutput:
         """Refine detections from an already loaded Grounding DINO result."""
         if save_mask and mask_output_dir is None:
             raise ValueError("--mask-output-dir is required when --save-mask is set.")
+        if min_refine_area_px < 0.0:
+            raise ValueError("--min-refine-area-px must be greater than or equal to 0.")
 
         image_rgb, image_width, image_height = load_image_rgb(image_path)
-        self._predictor.set_image(image_rgb)
 
         source_detections = dino_data.get("detections", [])
         if not isinstance(source_detections, list):
@@ -247,6 +276,7 @@ class SamBoxRefiner:
         refined_detections: list[dict[str, Any]] = []
         masks: list[Any | None] = []
         refined_count = 0
+        image_is_set = False
 
         for index, source_detection in enumerate(source_detections):
             if isinstance(source_detection, dict):
@@ -256,34 +286,41 @@ class SamBoxRefiner:
 
             bbox = coerce_bbox_xyxy(detection.get("bbox_xyxy"), image_width, image_height)
             if bbox is None:
-                detection.update(
-                    {
-                        "refined_bbox_xyxy": None,
-                        "mask_area": 0,
-                        "sam_score": None,
-                        "mask_path": None,
-                        "refine_status": "invalid_bbox",
-                    }
+                refined_detections.append(
+                    fallback_detection(
+                        detection=detection,
+                        fallback_bbox=detection.get("bbox_xyxy"),
+                        status="invalid_bbox_fallback",
+                    )
                 )
-                refined_detections.append(detection)
+                masks.append(None)
+                continue
+            if bbox_area_xyxy(bbox) < min_refine_area_px:
+                refined_detections.append(
+                    fallback_detection(
+                        detection=detection,
+                        fallback_bbox=bbox,
+                        status="skipped_small",
+                    )
+                )
                 masks.append(None)
                 continue
 
             try:
+                if not image_is_set:
+                    self._predictor.set_image(image_rgb)
+                    image_is_set = True
                 mask, sam_score = self.predict_mask(bbox)
                 mask_area = int(mask.sum())
                 refined_bbox = mask_to_bbox_xyxy(mask)
             except Exception as exc:
-                detection.update(
-                    {
-                        "refined_bbox_xyxy": None,
-                        "mask_area": 0,
-                        "sam_score": None,
-                        "mask_path": None,
-                        "refine_status": f"sam_error: {exc}",
-                    }
+                refined_detections.append(
+                    fallback_detection(
+                        detection=detection,
+                        fallback_bbox=bbox,
+                        status=f"sam_error_fallback: {exc}",
+                    )
                 )
-                refined_detections.append(detection)
                 masks.append(None)
                 continue
 
@@ -295,11 +332,11 @@ class SamBoxRefiner:
 
             detection.update(
                 {
-                    "refined_bbox_xyxy": refined_bbox,
+                    "refined_bbox_xyxy": refined_bbox if refined_bbox is not None else bbox,
                     "mask_area": mask_area,
                     "sam_score": sam_score,
                     "mask_path": mask_path,
-                    "refine_status": "refined" if refined_bbox is not None else "empty_mask",
+                    "refine_status": "refined" if refined_bbox is not None else "empty_mask_fallback",
                 }
             )
             if refined_bbox is not None:
@@ -316,6 +353,7 @@ class SamBoxRefiner:
             checkpoint=self.checkpoint,
             device=self.device,
             save_mask=save_mask,
+            min_refine_area_px=min_refine_area_px,
         )
         return SamRefineOutput(
             result=result,
@@ -352,6 +390,7 @@ def run_sam_refine_single(
     device: str,
     save_mask: bool = False,
     mask_output_dir: Path | None = None,
+    min_refine_area_px: float = 1024.0,
 ) -> SamRefineOutput:
     """Run SAM refinement for one image and one Grounding DINO JSON."""
     validate_refine_inputs(image_path, dino_json_path, checkpoint)
@@ -369,6 +408,7 @@ def run_sam_refine_single(
             checkpoint=checkpoint,
             device=device,
             save_mask=save_mask,
+            min_refine_area_px=min_refine_area_px,
         )
 
     refiner = SamBoxRefiner(checkpoint=checkpoint, model_type=model_type, device=device)
@@ -378,6 +418,7 @@ def run_sam_refine_single(
         dino_data=dino_data,
         save_mask=save_mask,
         mask_output_dir=mask_output_dir,
+        min_refine_area_px=min_refine_area_px,
     )
 
 

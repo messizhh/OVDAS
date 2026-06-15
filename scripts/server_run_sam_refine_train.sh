@@ -16,6 +16,7 @@ VIS_OUTPUT_DIR="${VIS_OUTPUT_DIR:-results/visualizations/sam_refine_train}"
 SAM_CHECKPOINT="${SAM_CHECKPOINT:-checkpoints/sam_vit_h_4b8939.pth}"
 MODEL_TYPE="${MODEL_TYPE:-vit_h}"
 DEVICE="${DEVICE:-cuda}"
+MIN_REFINE_AREA_PX="${MIN_REFINE_AREA_PX:-0}"
 
 mkdir -p logs
 LOG_FILE="logs/server_run_sam_refine_train_$(date +%Y%m%d_%H%M%S).log"
@@ -30,6 +31,7 @@ LOG_FILE="logs/server_run_sam_refine_train_$(date +%Y%m%d_%H%M%S).log"
   echo "[INFO] SAM checkpoint: ${SAM_CHECKPOINT}"
   echo "[INFO] SAM model type: ${MODEL_TYPE}"
   echo "[INFO] Device: ${DEVICE}"
+  echo "[INFO] Min refine area px: ${MIN_REFINE_AREA_PX}"
   echo "[INFO] Log file: ${LOG_FILE}"
 
   "${PYTHON_BIN}" tools/run_sam_refine_batch.py \
@@ -40,5 +42,6 @@ LOG_FILE="logs/server_run_sam_refine_train_$(date +%Y%m%d_%H%M%S).log"
     --sam-checkpoint "${SAM_CHECKPOINT}" \
     --model-type "${MODEL_TYPE}" \
     --device "${DEVICE}" \
+    --min-refine-area-px "${MIN_REFINE_AREA_PX}" \
     --skip-existing
 } 2>&1 | tee "${LOG_FILE}"
