@@ -114,10 +114,19 @@ count_images() {
     echo 0
     return
   fi
-  find "${image_dir}" -maxdepth 1 -type f \( \
-    -iname '*.jpg' -o -iname '*.jpeg' -o -iname '*.png' -o \
-    -iname '*.bmp' -o -iname '*.tif' -o -iname '*.tiff' \
-  \) | wc -l
+  "${PYTHON_BIN}" - "${image_dir}" <<'PY'
+import sys
+from pathlib import Path
+
+image_dir = Path(sys.argv[1])
+image_exts = {".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff"}
+image_count = sum(
+    1
+    for path in image_dir.iterdir()
+    if path.is_file() and path.suffix.lower() in image_exts
+)
+print(image_count)
+PY
 }
 
 count_files() {

@@ -106,6 +106,46 @@ class ServerRunOvdasTileFullScriptTest(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("Missing Grounding DINO checkpoint", result.stdout + result.stderr)
 
+    def test_preflight_counts_valid_image_symlinks_and_ignores_broken_links(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_root:
+            root = Path(temp_root)
+            image_dir = root / "images"
+            image_dir.mkdir()
+            target_dir = root / "targets"
+            target_dir.mkdir()
+            first_target = target_dir / "first.jpg"
+            second_target = target_dir / "second.png"
+            first_target.write_bytes(b"dummy")
+            second_target.write_bytes(b"dummy")
+            (image_dir / "first_link.JPG").symlink_to(first_target)
+            (image_dir / "second_link.PnG").symlink_to(second_target)
+            (image_dir / "broken_link.jpg").symlink_to(target_dir / "missing.jpg")
+
+            classes_config = root / "classes.yaml"
+            classes_config.write_text("classes:\n  - id: 0\n    name: car\n", encoding="utf-8")
+            dino_config = root / "dino_config.py"
+            dino_config.write_text("# dummy\n", encoding="utf-8")
+            sam_checkpoint = root / "sam.pth"
+            sam_checkpoint.write_bytes(b"dummy")
+
+            result = self.run_script(
+                ["--preflight-only"],
+                env={
+                    "IMAGE_DIR": image_dir.as_posix(),
+                    "EXPECTED_IMAGE_COUNT": "2",
+                    "CLASSES_CONFIG": classes_config.as_posix(),
+                    "GROUNDING_DINO_CONFIG": dino_config.as_posix(),
+                    "GROUNDING_DINO_CHECKPOINT": (root / "missing_dino.pth").as_posix(),
+                    "SAM_CHECKPOINT": sam_checkpoint.as_posix(),
+                },
+            )
+
+        combined_output = result.stdout + result.stderr
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("Train image count: 2", combined_output)
+        self.assertIn("Missing Grounding DINO checkpoint", combined_output)
+        self.assertNotIn("Expected 2 train images", combined_output)
+
 
 if __name__ == "__main__":
     unittest.main()
