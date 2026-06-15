@@ -3,6 +3,7 @@ from __future__ import annotations
 import unittest
 from pathlib import Path
 
+from src.open_vocab.phrase_normalization import load_class_mapping, resolve_class_id
 from src.open_vocab.tiled_inference import (
     build_tiled_result,
     class_aware_nms,
@@ -11,9 +12,13 @@ from src.open_vocab.tiled_inference import (
     map_tile_bbox_to_image,
     normalize_detection_for_merge,
 )
+from tools.generate_yolo_labels_from_auto import Summary, convert_detections
 
 
 class OvdasTileTest(unittest.TestCase):
+    def class_maps(self) -> tuple[dict[str, int], dict[int, str]]:
+        return load_class_mapping(Path("configs/classes_visdrone.yaml"))
+
     def test_generate_640_tiles_uses_20_percent_overlap_on_regular_steps(self) -> None:
         tiles = generate_tiles(2000, 640, tile_size=640, overlap_ratio=0.20)
         x_starts = [tile.xyxy[0] for tile in tiles]
@@ -64,6 +69,51 @@ class OvdasTileTest(unittest.TestCase):
     def test_empty_predictions_nms_returns_empty_list(self) -> None:
         self.assertEqual(class_aware_nms([], iou_threshold=0.5), [])
 
+    def test_combined_phrases_resolve_by_visdrone_class_order(self) -> None:
+        phrase_to_id, id_to_name = self.class_maps()
+        cases = {
+            "truck bus": "truck",
+            "car van truck bus": "car",
+            "car truck": "car",
+            "van truck bus": "van",
+            "car truck bus": "car",
+            "van bus": "van",
+        }
+
+        for phrase, expected_class_name in cases.items():
+            with self.subTest(phrase=phrase):
+                class_id, used_alias = resolve_class_id(phrase, phrase_to_id)
+                self.assertEqual(class_id, phrase_to_id[expected_class_name])
+                assert class_id is not None
+                self.assertEqual(id_to_name[class_id], expected_class_name)
+                self.assertIs(used_alias, True)
+
+    def test_exact_match_and_explicit_alias_priority_stay_unchanged(self) -> None:
+        phrase_to_id, _ = self.class_maps()
+
+        class_id, used_alias = resolve_class_id("car", phrase_to_id)
+        self.assertEqual(class_id, phrase_to_id["car"])
+        self.assertIs(used_alias, False)
+
+        explicit_alias_cases = {
+            "car van": "car",
+            "van truck": "van",
+            "pedestrian people": "people",
+        }
+        for phrase, expected_class_name in explicit_alias_cases.items():
+            with self.subTest(phrase=phrase):
+                class_id, used_alias = resolve_class_id(phrase, phrase_to_id)
+                self.assertEqual(class_id, phrase_to_id[expected_class_name])
+                self.assertIs(used_alias, True)
+
+    def test_unknown_and_substring_phrases_do_not_match_classes(self) -> None:
+        phrase_to_id, _ = self.class_maps()
+        for phrase in ("airplane ship", "cargo vanishing busstop", "motorcycle"):
+            with self.subTest(phrase=phrase):
+                class_id, used_alias = resolve_class_id(phrase, phrase_to_id)
+                self.assertIsNone(class_id)
+                self.assertIs(used_alias, False)
+
     def test_normalized_detection_keeps_json_compatible_fields(self) -> None:
         phrase_to_id = {"car": 3, "van": 4}
         id_to_name = {3: "car", 4: "van"}
@@ -93,6 +143,63 @@ class OvdasTileTest(unittest.TestCase):
         self.assertEqual(normalized["tile_index"], 0)
         self.assertEqual(normalized["original_score"], 0.88)
         self.assertIs(normalized["merged"], False)
+
+    def test_combined_phrase_normalized_detection_fields_are_consistent(self) -> None:
+        phrase_to_id, id_to_name = self.class_maps()
+        detection = {
+            "bbox_xyxy": [1, 2, 10, 12],
+            "score": 0.88,
+            "phrase": "car truck bus",
+        }
+        normalized = normalize_detection_for_merge(
+            detection=detection,
+            image_width=100,
+            image_height=100,
+            phrase_to_id=phrase_to_id,
+            id_to_name=id_to_name,
+            source="tile",
+            tile=generate_tiles(100, 100, tile_size=64, overlap_ratio=0.20)[0],
+        )
+
+        self.assertIsNotNone(normalized)
+        assert normalized is not None
+        self.assertEqual(normalized["original_phrase"], "car truck bus")
+        self.assertEqual(normalized["normalized_phrase"], "car")
+        self.assertEqual(normalized["class_id"], phrase_to_id["car"])
+        self.assertEqual(normalized["class_name"], "car")
+        self.assertIs(normalized["phrase_alias_used"], True)
+
+    def test_yolo_label_generation_keeps_combined_phrase_detection(self) -> None:
+        class Args:
+            enable_size_aware_filter = False
+            score_threshold = 0.35
+            bbox_key = "bbox_xyxy"
+            fallback_bbox_key = "bbox_xyxy"
+            min_box_area = 4.0
+
+        phrase_to_id, id_to_name = self.class_maps()
+        summary = Summary()
+        labels = convert_detections(
+            detections=[
+                {
+                    "bbox_xyxy": [10, 10, 30, 40],
+                    "score": 0.9,
+                    "phrase": "truck bus",
+                }
+            ],
+            image_width=100,
+            image_height=100,
+            phrase_to_id=phrase_to_id,
+            id_to_name=id_to_name,
+            args=Args(),
+            summary=summary,
+        )
+
+        self.assertEqual(len(labels), 1)
+        self.assertEqual(labels[0].class_id, phrase_to_id["truck"])
+        self.assertEqual(labels[0].class_name, "truck")
+        self.assertEqual(summary.skipped_unknown_class, 0)
+        self.assertEqual(summary.mapped_alias_labels, 1)
 
     def test_tiled_result_json_preserves_existing_top_level_fields(self) -> None:
         result = build_tiled_result(

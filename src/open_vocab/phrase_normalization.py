@@ -81,6 +81,37 @@ def resolve_class_id(
         return class_id, False
 
     alias_target = PHRASE_ALIASES.get(cleaned)
-    if alias_target is None:
+    if alias_target is not None:
+        return phrase_to_id.get(alias_target), True
+
+    combined_class_id = resolve_combined_class_id(cleaned, phrase_to_id)
+    if combined_class_id is None:
         return None, False
-    return phrase_to_id.get(alias_target), True
+    return combined_class_id, True
+
+
+def resolve_combined_class_id(
+    cleaned_phrase: str,
+    phrase_to_id: dict[str, int],
+) -> int | None:
+    """Resolve a multi-class phrase by full-word class matches in config order."""
+    phrase_words = cleaned_phrase.split()
+    if not phrase_words:
+        return None
+
+    for class_name, class_id in phrase_to_id.items():
+        class_words = class_name.split()
+        if class_words and contains_word_sequence(phrase_words, class_words):
+            return class_id
+    return None
+
+
+def contains_word_sequence(words: list[str], target: list[str]) -> bool:
+    """Return whether target appears as a complete-word contiguous sequence."""
+    if len(target) > len(words):
+        return False
+    end = len(words) - len(target) + 1
+    for start in range(end):
+        if words[start : start + len(target)] == target:
+            return True
+    return False
