@@ -1,0 +1,4 @@
+method,total_false_negatives,small_false_negatives,medium_false_negatives,large_false_negatives,no_overlap,no_same_class_prediction,low_iou,pedestrian_false_negatives,motor_false_negatives,car_false_negatives
+DINO-only,30122,23608,6317,197,14399,14813,905,8757,4886,8246
+DINO+SAM,30171,23617,6353,201,14435,14813,918,8758,4886,8281
+OVDAS-Tile,21980,18247,3585,148,14329,4737,2914,7547,4877,3849

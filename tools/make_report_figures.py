@@ -22,6 +22,8 @@ REQUIRED_TABLES = (
     "ablation_threshold.csv",
     "ablation_prompt.csv",
     "auto_label_quality.csv",
+    "auto_label_val_three_method_comparison.csv",
+    "auto_label_val_failure_comparison.csv",
 )
 
 EXPECTED_FIGURES = (
@@ -31,6 +33,8 @@ EXPECTED_FIGURES = (
     "ablation_method.png",
     "ablation_threshold.png",
     "ablation_prompt.png",
+    "auto_label_val_metrics.png",
+    "auto_label_val_failure_comparison.png",
 )
 
 METRIC_LABELS = {
@@ -38,6 +42,11 @@ METRIC_LABELS = {
     "recall": "Recall",
     "map50": "mAP@0.5",
     "map50_95": "mAP@0.5:0.95",
+    "f1": "F1",
+    "mean_iou": "Mean IoU",
+    "no_overlap": "No overlap",
+    "no_same_class_prediction": "No same-class prediction",
+    "low_iou": "Low IoU",
 }
 
 
@@ -111,6 +120,15 @@ def table_columns(rows: list[dict[str, str]]) -> set[str]:
 def to_float(value: str | None) -> float | None:
     """Convert a CSV cell to float, returning None for blanks or invalid values."""
     if value is None:
+        return None
+
+    value = str(value).strip()
+    if not value:
+        return None
+
+    try:
+        return float(value)
+    except ValueError:
         return None
 
 
@@ -296,6 +314,37 @@ def plot_three_model_map(table_dir: Path, output_dir: Path) -> None:
     )
 
 
+def plot_auto_label_val_metrics(table_dir: Path, output_dir: Path) -> None:
+    """Generate validation quality comparison for the three auto-label methods."""
+    rows = read_table(table_dir, "auto_label_val_three_method_comparison.csv")
+    plot_grouped_metrics(
+        rows=rows,
+        x_column="method",
+        metric_columns=["precision", "recall", "f1", "mean_iou"],
+        output_path=output_dir / "auto_label_val_metrics.png",
+        title="Auto-Label Quality on VisDrone Val",
+    )
+
+
+def plot_auto_label_failure_comparison(
+    table_dir: Path,
+    output_dir: Path,
+) -> None:
+    """Generate false-negative reason comparison for the three methods."""
+    rows = read_table(table_dir, "auto_label_val_failure_comparison.csv")
+    plot_grouped_metrics(
+        rows=rows,
+        x_column="method",
+        metric_columns=[
+            "no_overlap",
+            "no_same_class_prediction",
+            "low_iou",
+        ],
+        output_path=output_dir / "auto_label_val_failure_comparison.png",
+        title="False-Negative Reasons on VisDrone Val",
+    )
+
+
 def plot_small_object_recall(table_dir: Path, output_dir: Path) -> None:
     """Generate small/medium/large recall chart."""
     output_path = output_dir / "small_object_recall.png"
@@ -436,6 +485,8 @@ def run(args: argparse.Namespace) -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
     plot_yolo_main_metrics(table_dir, output_dir)
     plot_three_model_map(table_dir, output_dir)
+    plot_auto_label_val_metrics(table_dir, output_dir)
+    plot_auto_label_failure_comparison(table_dir, output_dir)
     plot_small_object_recall(table_dir, output_dir)
     plot_ablation_method(table_dir, output_dir)
     plot_ablation_threshold(table_dir, output_dir)
